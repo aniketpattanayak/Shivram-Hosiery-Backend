@@ -1,0 +1,73 @@
+const express = require('express');
+const dotenv = require('dotenv');
+const cors = require('cors');
+const http = require('http');
+const { Server } = require('socket.io');
+const connectDB = require('./config/db');
+
+// Config
+dotenv.config();
+connectDB();
+
+const app = express();
+const server = http.createServer(app);
+
+// Real-Time Engine (Socket.io)
+const io = new Server(server, {
+  cors: {
+    origin: ["http://localhost:3000"], // Frontend URL
+    methods: ["GET", "POST", "PUT", "DELETE"]
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Inject Socket.io into every Request
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
+// Test Route
+app.get('/', (req, res) => {
+  res.send('🏭 Factory ERP API is Running...');
+});
+
+// --- API ROUTES ---
+app.use('/api/dashboard/stats', require('./controllers/dashboardController').getStats);
+
+// Commercial Routes
+app.use('/api/products', require('./routes/productRoutes'));
+app.use('/api/sales', require('./routes/salesRoutes'));
+app.use('/api/procurement', require('./routes/procurementRoutes'));
+app.use('/api/vendors', require('./routes/vendorRoutes'));
+
+// Factory Floor Routes
+app.use('/api/production', require('./routes/productionRoutes'));
+app.use('/api/inventory', require('./routes/inventoryRoutes'));
+
+// 🚨 CRITICAL: Shop Floor & Job Card Route
+app.use('/api/shopfloor', require('./routes/jobRoutes')); 
+
+app.use('/api/sampling', require('./routes/samplingRoutes'));
+app.use('/api/quality', require('./routes/qualityRoutes'));
+app.use('/api/finance', require('./routes/financeRoutes'));
+app.use('/api/reports', require('./routes/reportRoutes'));
+app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/sales/quotes', require('./routes/quotationRoutes'));
+app.use('/api/sales/expenses', require('./routes/expenseRoutes'));
+app.use('/api/users', require('./routes/userRoutes'));
+app.use('/api/master', require('./routes/masterRoutes'));
+
+
+// Socket Events
+io.on('connection', (socket) => {
+  console.log('🔌 Client Connected:', socket.id);
+  socket.on('disconnect', () => console.log('🔌 Client Disconnected'));
+});
+
+// Start Server
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

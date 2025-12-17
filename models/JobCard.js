@@ -1,17 +1,15 @@
-// backend/models/JobCard.js
 const mongoose = require('mongoose');
 
 const JobCardSchema = new mongoose.Schema({
   jobId: { type: String, required: true, unique: true }, 
   
-  // ... (Batch fields) ...
+  // Links
   isBatch: { type: Boolean, default: false },
   planId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionPlan' },
   batchPlans: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ProductionPlan' }],
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   
-  // 🚨 Type Enum
   type: { 
     type: String, 
     enum: ['In-House', 'Job-Work', 'Full-Buy'], 
@@ -26,17 +24,55 @@ const JobCardSchema = new mongoose.Schema({
     default: 'Pending' 
   },
   
+  // 🟢 NEW: Added 'Packaging_Started' to the flow
   currentStep: { 
     type: String, 
-    enum: ['Material_Pending', 'Cutting_Started', 'Sewing_Started', 'QC_Pending', 'QC_Completed','Procurement_Pending', 'PO_Raised'],
+    enum: [
+      'Material_Pending', 
+      'Cutting_Started', 
+      'Sewing_Started', 
+      'Packaging_Started', // <--- Added this
+      'QC_Pending', 
+      'QC_Completed',
+      'Procurement_Pending', 
+      'PO_Raised'
+    ],
     default: 'Material_Pending' 
   },
 
-  // 🚨 NEW FIELD: Store the Picking List Permanently 🚨
+  // Routing (Who does what?)
+  routing: {
+    cutting: { 
+      type: { type: String, enum: ['In-House', 'Job Work'] },
+      vendorName: String 
+    },
+    stitching: { 
+      type: { type: String, enum: ['In-House', 'Job Work'] },
+      vendorName: String 
+    },
+    packing: { 
+      type: { type: String, enum: ['In-House', 'Job Work'] },
+      vendorName: String 
+    }
+  },
+
+  // Permanent Timeline
+  timeline: [
+    {
+      stage: String,
+      action: String,
+      vendorName: String,
+      details: String,
+      timestamp: { type: Date, default: Date.now },
+      performedBy: String
+    }
+  ],
+
+  // Backward Compatibility
   issuedMaterials: [
       {
           materialName: String,
-          lotNumber: String, // The specific Lot used
+          lotNumber: String,
           qtyIssued: Number,
           issuedAt: { type: Date, default: Date.now }
       }

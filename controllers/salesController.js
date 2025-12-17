@@ -2,28 +2,24 @@ const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const ProductionPlan = require('../models/ProductionPlan');
-const Client = require('../models/Client'); // 🟢 Added
-const Lead = require('../models/Lead');     // 🟢 Added
+const Client = require('../models/Client'); 
+const Lead = require('../models/Lead');     
 
 // ==========================================
-// 1. SALES ORDER MANAGEMENT (Your Existing Logic)
+// 1. SALES ORDER MANAGEMENT
 // ==========================================
 
-// @desc    Create New Sales Order (Smart Allocate)
-// @route   POST /api/sales/orders
 exports.createOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    // 1. Get Data
     const { customerName, items, deliveryDate, priority } = req.body;
     
     const processedItems = [];
     let isProductionTriggered = false;
     const productionPlansToCreate = [];
 
-    // 2. Loop through every item
     for (const item of items) {
       const product = await Product.findOne({ name: item.productName }).session(session);
 
@@ -31,7 +27,6 @@ exports.createOrder = async (req, res) => {
         throw new Error(`Product '${item.productName}' not found in Master.`);
       }
 
-      // Safe access to stock
       const currentWarehouse = product.stock?.warehouse || 0;
       const currentReserved = product.stock?.reserved || 0;
       const availableStock = currentWarehouse - currentReserved;
@@ -40,23 +35,19 @@ exports.createOrder = async (req, res) => {
       let sendToProduction = 0;
 
       if (availableStock >= item.qtyOrdered) {
-        // We have it all!
         allocatedFromStock = item.qtyOrdered;
         sendToProduction = 0;
       } else {
-        // Partial or None
         allocatedFromStock = Math.max(0, availableStock);
         sendToProduction = item.qtyOrdered - allocatedFromStock;
       }
 
-      // 3. Update Inventory
       if (allocatedFromStock > 0) {
         if (!product.stock) product.stock = { warehouse: 0, reserved: 0 };
         product.stock.reserved += allocatedFromStock;
         await product.save({ session });
       }
 
-      // 4. Prepare Production Plan
       if (sendToProduction > 0) {
         isProductionTriggered = true;
         const uniqueSuffix = Math.floor(1000 + Math.random() * 9000);
@@ -79,7 +70,6 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    // 5. Create Order
     const suffix = Math.floor(1000 + Math.random() * 9000);
     const orderId = `ORD-${new Date().getFullYear()}-${suffix}`;
 
@@ -94,7 +84,6 @@ exports.createOrder = async (req, res) => {
 
     await newOrder.save({ session });
 
-    // 6. Save Plans
     if (productionPlansToCreate.length > 0) {
       const plans = productionPlansToCreate.map(plan => ({
         ...plan,
@@ -103,9 +92,7 @@ exports.createOrder = async (req, res) => {
       await ProductionPlan.insertMany(plans, { session });
     }
 
-    // 7. Commit
     await session.commitTransaction();
-
     res.status(201).json({ success: true, msg: 'Order processed', order: newOrder });
 
   } catch (error) {
@@ -117,8 +104,6 @@ exports.createOrder = async (req, res) => {
   }
 };
 
-// @desc    Get All Orders
-// @route   GET /api/sales/orders
 exports.getOrders = async (req, res) => {
     try {
         const orders = await Order.find().sort({ createdAt: -1 });
@@ -129,7 +114,7 @@ exports.getOrders = async (req, res) => {
 };
 
 // ==========================================
-// 2. LEAD MANAGEMENT (CRM) - 🟢 NEW
+// 2. LEAD MANAGEMENT (CRM)
 // ==========================================
 
 exports.getLeads = async (req, res) => {
@@ -181,7 +166,7 @@ exports.updateLeadActivity = async (req, res) => {
 };
 
 // ==========================================
-// 3. CLIENT MASTER - 🟢 NEW
+// 3. CLIENT MASTER
 // ==========================================
 
 exports.getClients = async (req, res) => {
@@ -199,5 +184,38 @@ exports.createClient = async (req, res) => {
     res.status(201).json(newClient);
   } catch (error) {
     res.status(500).json({ msg: error.message });
+  }
+};
+
+// 🟢 NEW FUNCTION: Update Client Activity & Status
+// @route   PUT /api/sales/clients/:id
+exports.updateClient = async (req, res) => {
+  try {
+    const { status, lastActivity } = req.body;
+    
+    // 1. Find Client
+    const client = await Client.findById(req.params.id);
+    if (!client) return res.status(404).json({ msg: 'Client not found' });
+
+    // 2. Update Status if provided
+    if (status) client.status = status;
+
+    // 3. Add to Activity Log if provided
+    if (lastActivity) {
+      // Ensure activityLog array exists (for older records)
+      if (!client.activityLog) client.activityLog = [];
+      
+      client.activityLog.push({
+        type: lastActivity.type,
+        remark: lastActivity.remark,
+        date: new Date()
+      });
+    }
+
+    await client.save();
+    res.json(client);
+  } catch (err) {
+    console.error("Update Client Error:", err.message);
+    res.status(500).send('Server Error');
   }
 };

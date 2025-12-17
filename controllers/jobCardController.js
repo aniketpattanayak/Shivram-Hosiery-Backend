@@ -6,7 +6,6 @@ const Product = require("../models/Product");
 // @route   GET /api/shopfloor
 exports.getJobCards = async (req, res) => {
   try {
-    // Fetch all jobs that are not fully completed
     const jobs = await JobCard.find({ status: { $ne: "Completed" } })
       .populate("productId")
       .populate("planId")
@@ -53,10 +52,8 @@ exports.issueMaterial = async (req, res) => {
         return res.status(400).json({ msg: 'Product BOM is empty.' });
     }
 
-    // ==================================================
-    // 🛑 PHASE 1: PRE-CHECK VALIDATION (Collect ALL Errors)
-    // ==================================================
-    const missingItems = []; // <--- We store errors here
+    // PHASE 1: PRE-CHECK VALIDATION
+    const missingItems = []; 
 
     for (const item of product.bom) {
         const material = await Material.findById(item.material);
@@ -66,7 +63,6 @@ exports.issueMaterial = async (req, res) => {
 
         const requiredQty = item.qtyRequired * job.totalQty;
         
-        // Instead of stopping, we push to the list
         if (material.stock.current < requiredQty) {
             missingItems.push(
                 `${material.name} (Req: ${requiredQty}, Avail: ${material.stock.current})`
@@ -74,24 +70,19 @@ exports.issueMaterial = async (req, res) => {
         }
     }
 
-    // NOW we check if there were any errors
     if (missingItems.length > 0) {
         return res.status(400).json({ 
             msg: `Insufficient Stock for:\n` + missingItems.join('\n') 
         });
     }
 
-    // ==================================================
-    // ✅ PHASE 2: EXECUTION (Deduct & Save)
-    // ==================================================
-    
+    // PHASE 2: EXECUTION
     let pickingList = []; 
 
     for (const item of product.bom) {
         const material = await Material.findById(item.material);
         const requiredQty = item.qtyRequired * job.totalQty;
         
-        // FIFO Logic
         if (!material.stock.batches) material.stock.batches = [];
         material.stock.batches.sort((a, b) => new Date(a.addedAt) - new Date(b.addedAt));
 
@@ -129,7 +120,6 @@ exports.issueMaterial = async (req, res) => {
         await material.save();
     }
 
-    // 🚨 NEW STEP: Save the Picking List into the Job Card permanently 🚨
     job.issuedMaterials = pickingList.map(p => ({
         materialName: p.material,
         lotNumber: p.lotNumber,
@@ -138,8 +128,17 @@ exports.issueMaterial = async (req, res) => {
 
     job.currentStep = 'Cutting_Started';
     job.status = 'In_Progress';
-    if (!job.history) job.history = [];
-    job.history.push({ step: 'Material Issued', status: 'In_Progress', timestamp: new Date() });
+    
+    // 🟢 UPDATED: Push to 'timeline' for the new history modal
+    if (!job.timeline) job.timeline = [];
+    job.timeline.push({ 
+        stage: 'Material Issue', 
+        action: 'Fabric Issued',
+        vendorName: 'Store Dept',
+        details: 'Raw Material Issued from Inventory',
+        timestamp: new Date(),
+        performedBy: 'Store Manager'
+    });
 
     await job.save();
     
@@ -156,31 +155,66 @@ exports.issueMaterial = async (req, res) => {
   }
 };
 
+// ---------------------------------------------------------
+// 🟢 FIXED: RECEIVE PROCESS WITH HISTORY LOGGING
+// ---------------------------------------------------------
 // @desc    Move Job to Next Stage (Receive Process)
 // @route   POST /api/shopfloor/receive
 exports.receiveProcess = async (req, res) => {
   try {
     const { jobId, nextStage } = req.body;
 
-    // Using findOne based on the custom ID string "jobId"
     const job = await JobCard.findOne({ jobId });
     if (!job) return res.status(404).json({ msg: "Job not found" });
 
-    job.currentStep = nextStage;
-
-    // If moving to QC, update main status
-    if (nextStage === "QC_Pending") job.status = "QC_Pending";
-
-    if (!job.history) job.history = [];
-    job.history.push({
-      step: nextStage,
-      status: job.status,
+    // 🟢 1. CALCULATE HISTORY LOG BEFORE MOVING STAGE
+    // We check where the job IS right now to know what was just finished.
+    let historyLog = {
+      stage: '',
+      action: 'Completed',
+      vendorName: 'In-House',
       timestamp: new Date(),
-    });
+      details: '',
+      performedBy: 'Production Mgr'
+    };
+
+    // If currently at Cutting -> We are finishing Cutting
+    if (job.currentStep === 'Cutting_Started') {
+        historyLog.stage = 'Cutting';
+        historyLog.action = 'Cutting Completed';
+        historyLog.vendorName = job.routing?.cutting?.vendorName || 'In-House';
+        historyLog.details = `Cut Panels Received from ${historyLog.vendorName}`;
+    } 
+    // If currently at Sewing -> We are finishing Sewing
+    else if (job.currentStep === 'Sewing_Started') {
+        historyLog.stage = 'Stitching';
+        historyLog.action = 'Stitching Completed';
+        historyLog.vendorName = job.routing?.stitching?.vendorName || 'In-House';
+        historyLog.details = `Garments Received from ${historyLog.vendorName}`;
+    }
+    // If currently at Packaging -> We are finishing Packaging
+    else if (job.currentStep === 'Packaging_Started') {
+        historyLog.stage = 'Packaging';
+        historyLog.action = 'Packaging Completed';
+        historyLog.vendorName = job.routing?.packing?.vendorName || 'In-House';
+        historyLog.details = `Packed Goods Ready for QC`;
+    }
+
+    // 🟢 2. PUSH TO TIMELINE (New Standard)
+    if (historyLog.stage) {
+        if (!job.timeline) job.timeline = [];
+        job.timeline.push(historyLog);
+    }
+
+    // 3. Update Stage
+    job.currentStep = nextStage;
+    if (nextStage === "QC_Pending") job.status = "QC_Pending";
 
     await job.save();
     res.json({ success: true, msg: `Moved to ${nextStage}`, job });
+    
   } catch (error) {
+    console.error("Receive Error:", error);
     res.status(500).json({ msg: error.message });
   }
 };

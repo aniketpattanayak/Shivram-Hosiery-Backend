@@ -1,52 +1,35 @@
 const mongoose = require("mongoose");
-const bcrypt = require("bcryptjs"); // 🟢 REQUIRED for hashing & checking passwords
+const bcrypt = require("bcryptjs");
 
 const UserSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-
-    role: { type: String, default: "Worker" }, // Just a label (e.g. "Manager")
-
-    // 🟢 The Matrix: Granular Access Control
+    role: { type: String, default: "Worker" },
+    
+    // Simplified Permissions (Array of Strings)
     permissions: {
-      sales: {
-        read: { type: Boolean, default: false },
-        write: { type: Boolean, default: false },
-      },
-      inventory: {
-        read: { type: Boolean, default: false },
-        write: { type: Boolean, default: false },
-      },
-      production: {
-        read: { type: Boolean, default: false },
-        write: { type: Boolean, default: false },
-      },
-      finance: {
-        read: { type: Boolean, default: false },
-        write: { type: Boolean, default: false },
-      },
-      settings: {
-        read: { type: Boolean, default: false },
-        write: { type: Boolean, default: false },
-      },
+      type: [String], 
+      default: [] 
     },
   },
   { timestamps: true }
 );
 
-// 🟢 FIX 1: Add method to compare passwords (Crucial for Login)
+// 1. Password Match Method
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// 🟢 FIX 2: Encrypt password automatically before saving
-// This prevents "Double Hashing" logic in controllers
-UserSchema.pre("save", async function (next) {
+// 🟢 FIX: Correct Async Pre-Save Hook (No 'next')
+UserSchema.pre("save", async function () {
+  // If password is NOT modified, we just return (stops the function)
   if (!this.isModified("password")) {
-    next();
+    return; 
   }
+
+  // Otherwise, hash the password
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });

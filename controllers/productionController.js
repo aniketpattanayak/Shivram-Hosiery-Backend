@@ -1,10 +1,72 @@
+const mongoose = require('mongoose');
+const Product = require('../models/Product');
 const ProductionPlan = require('../models/ProductionPlan');
 const JobCard = require('../models/JobCard');
-const Product = require('../models/Product');
-const mongoose = require('mongoose');
+const Vendor = require('../models/Vendor'); // 🟢 Required for Vendor Sync
+
+// ==========================================
+// 🟢 SECTION 1: PRODUCT MANAGEMENT
+// ==========================================
+
+// @desc    Get All Products
+exports.getProducts = async (req, res) => {
+  try {
+    const products = await Product.find().populate('bom.material').sort({ createdAt: -1 }); 
+    res.json(products);
+  } catch (error) {
+    res.status(500).json({ msg: error.message });
+  }
+};
+
+// @desc    Create New Product (with Recipe & Price)
+exports.createProduct = async (req, res) => {
+  try {
+    const { 
+        name, sku, category, subCategory, fabricType, color, 
+        costPerUnit, sellingPrice, bom 
+    } = req.body;
+    
+    const suffix = Math.floor(1000 + Math.random() * 9000);
+    const productId = `PROD-${name.substring(0,3).toUpperCase()}-${suffix}`;
+
+    const product = await Product.create({
+      productId,
+      sku,           
+      name,
+      category,
+      subCategory,
+      fabricType,
+      color,         
+      costPerUnit: Number(costPerUnit),   
+      sellingPrice: Number(sellingPrice), 
+      bom, 
+      stock: { warehouse: 0, reserved: 0, batches: [] }
+    });
+
+    res.status(201).json({ success: true, product });
+  } catch (error) {
+    res.status(500).json({ msg: error.message });
+  }
+};
+
+// @desc    Delete a Product
+exports.deleteProduct = async (req, res) => {
+    try {
+      const product = await Product.findById(req.params.id);
+      if (!product) return res.status(404).json({ msg: 'Product not found' });
+  
+      await product.deleteOne();
+      res.json({ success: true, msg: 'Product removed' });
+    } catch (error) {
+      res.status(500).json({ msg: error.message });
+    }
+};
+
+// ==========================================
+// 🟢 SECTION 2: PRODUCTION PLANNING (The Fix for Sync)
+// ==========================================
 
 // @desc    Get Pending Production Plans
-// @route   GET /api/production/pending
 exports.getPendingPlans = async (req, res) => {
   try {
     const plans = await ProductionPlan.find({ 
@@ -19,10 +81,9 @@ exports.getPendingPlans = async (req, res) => {
     console.error("Error fetching pending plans:", error);
     res.status(500).json({ msg: error.message });
   }
-}
+};
 
-// @desc    Confirm Strategy (Handles Single & Batch with Hybrid Routing)
-// @route   POST /api/production/confirm-strategy
+// @desc    Confirm Strategy (FIXED DATA SAVING)
 exports.confirmStrategy = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -30,39 +91,31 @@ exports.confirmStrategy = async (req, res) => {
   try {
     const { planId, planIds, splits } = req.body; 
 
-    // 1. Determine if this is a Batch or Single operation
+    // 🟢 1. LOG THE DATA (Check your terminal when you click confirm)
+    console.log("🔥 DATA RECEIVED FROM FRONTEND:", JSON.stringify(splits, null, 2));
+
     const isBatch = Array.isArray(planIds) && planIds.length > 0;
     const targetIds = isBatch ? planIds : [planId];
 
-    // Safety Check for Bad IDs
     if (!targetIds.every(id => mongoose.Types.ObjectId.isValid(id))) {
       throw new Error(`Invalid Plan ID format detected.`);
     }
 
-    // 2. Fetch all related plans
     const plans = await ProductionPlan.find({ _id: { $in: targetIds } }).populate('product').session(session);
     
     if (plans.length !== targetIds.length) {
         throw new Error('One or more Production Plans not found');
     }
 
-    // 3. Validation & Aggregation
     let totalQty = 0;
     let productRef = null;
 
     for (const plan of plans) {
         if (!plan.product) throw new Error(`Product definition missing for plan ${plan._id}`);
-        
-        // Ensure all plans in a batch are for the same product
         if (!productRef) productRef = plan.product;
-        else if (productRef._id.toString() !== plan.product._id.toString()) {
-            throw new Error("Cannot batch different products together.");
-        }
-
         totalQty += plan.totalQtyToMake;
     }
 
-    // Validate Total Split Qty vs Required Qty
     const totalSplitQty = splits.reduce((sum, s) => sum + (Number(s.qty) || 0), 0);
     if (totalSplitQty !== totalQty) {
         throw new Error(`Total assigned (${totalSplitQty}) does not match required Qty (${totalQty})`);
@@ -70,54 +123,27 @@ exports.confirmStrategy = async (req, res) => {
 
     const createdJobs = [];
 
-    // 4. Create Job Cards based on Splits
     for (const split of splits) {
       if (split.qty <= 0) continue;
 
       const mode = split.mode || split.type; 
-      if (!mode) throw new Error("Error: Split mode/type is missing.");
 
-      // Generate ID
+      // 🟢 2. SIMPLIFIED ASSIGNMENT LOGIC
+      // We take whatever the frontend gives us.
+      let finalVendorId = split.vendorId || null;
+      let finalCost = Number(split.cost) || 0;
+
+      console.log(`🔹 Processing Split: Mode=${mode}, Vendor=${finalVendorId}, Cost=${finalCost}`);
+
       const suffix = Math.floor(1000 + Math.random() * 9000);
-      let prefix = 'JC-IN'; 
-      
-      let initialStep = 'Material_Pending';
-      let typeForDb = 'In-House'; 
+      let prefix = mode === 'Full-Buy' ? 'TR-REQ' : 'JC-IN'; 
+      if (mode === 'Manufacturing' && split.routing?.cutting?.type === 'Job Work') prefix = 'JC-JW';
 
-      // Determine Prefix based on Cutting Strategy
-      if (mode === 'Manufacturing') {
-          if (split.routing?.cutting?.type === 'Job Work') {
-              prefix = 'JC-JW';
-          }
-          typeForDb = 'Job-Work'; 
-          if (split.routing?.cutting?.type === 'In-House' && split.routing?.stitching?.type === 'In-House') {
-            typeForDb = 'In-House';
-          }
-      } 
-      else if (mode === 'Full-Buy') {
-          prefix = 'TR-REQ'; 
-          typeForDb = 'Full-Buy';
-          initialStep = 'Procurement_Pending'; 
-      }
+      let initialStep = mode === 'Full-Buy' ? 'Procurement_Pending' : 'Material_Pending';
+      let typeForDb = mode === 'Full-Buy' ? 'Full-Buy' : (mode === 'Manufacturing' ? 'In-House' : 'Job-Work');
 
       const jobId = `${prefix}-${suffix}`;
-
-      // 🟢 PREPARE DETAILED HISTORY TEXT (Includes Packaging & Vendors)
-      let historyDetails = 'Direct Purchase Request Created';
       
-      if (mode === 'Manufacturing') {
-          const r = split.routing;
-          // Helper to format "Type (Vendor)"
-          const fmt = (stage) => {
-              const type = r[stage]?.type || 'N/A';
-              const vend = r[stage]?.vendorName ? `(${r[stage].vendorName})` : '';
-              return `${type} ${vend}`;
-          };
-
-          historyDetails = `Production Strategy defined:\n1. Cutting: ${fmt('cutting')}\n2. Stitching: ${fmt('stitching')}\n3. Packing: ${fmt('packing')}`;
-      }
-
-      // Create Job Card Object
       const newJobData = {
         jobId,
         isBatch: isBatch,
@@ -126,57 +152,39 @@ exports.confirmStrategy = async (req, res) => {
         batchPlans: isBatch ? targetIds : [], 
         productId: productRef._id, 
         totalQty: split.qty, 
-        
         type: typeForDb,
+        
+        // 🟢 3. FORCE SAVE VALUES
+        vendorId: finalVendorId, 
+        unitCost: finalCost,        
+
         status: 'Pending',
         currentStep: initialStep,
-        
-        // 🟢 FIXED: Timeline now contains full details including Packaging
         timeline: [{ 
             stage: 'Created', 
-            action: 'Job Card Generated',
-            details: historyDetails,
+            action: 'Job Card Generated', 
             timestamp: new Date(), 
-            performedBy: 'Admin'
+            performedBy: 'Admin' 
         }]
       };
 
-      // Add Routing Data if Manufacturing
       if (mode === 'Manufacturing' && split.routing) {
-          newJobData.routing = {
-              cutting: {
-                  type: split.routing.cutting.type,
-                  vendorName: split.routing.cutting.vendorName
-              },
-              stitching: {
-                  type: split.routing.stitching.type,
-                  vendorName: split.routing.stitching.vendorName
-              },
-              packing: {
-                  type: split.routing.packing.type,
-                  vendorName: split.routing.packing.vendorName
-              }
-          };
+          newJobData.routing = split.routing;
       }
 
       const job = await JobCard.create([newJobData], { session });
       createdJobs.push(job[0]);
     }
 
-    // 5. Update Status of ALL original Production Plans
     await ProductionPlan.updateMany(
         { _id: { $in: targetIds } },
-        { 
-            $set: { 
-                status: 'Scheduled',
-                splits: splits 
-            }
-        },
+        { $set: { status: 'Scheduled', splits: splits } },
         { session }
     );
 
     await session.commitTransaction();
-    res.json({ success: true, msg: isBatch ? 'Batch Jobs Created' : 'Job Cards Created', jobs: createdJobs });
+    console.log("✅ JOB CARDS CREATED SUCCESSFULLY");
+    res.json({ success: true, msg: 'Strategy Confirmed', jobs: createdJobs });
 
   } catch (error) {
     await session.abortTransaction();
@@ -187,8 +195,7 @@ exports.confirmStrategy = async (req, res) => {
   }
 };
 
-// @desc    Get Active Job Cards
-// @route   GET /api/production/jobs
+// @desc    Get Active Jobs
 exports.getActiveJobs = async (req, res) => {
   try {
     const jobs = await JobCard.find({ currentStep: { $ne: 'QC_Completed' } })
@@ -202,14 +209,11 @@ exports.getActiveJobs = async (req, res) => {
   }
 };
 
-// @desc    Delete Production Plan
-// @route   DELETE /api/production/:id
+// @desc    Delete Plan
 exports.deletePlan = async (req, res) => {
   try {
     const result = await ProductionPlan.findByIdAndDelete(req.params.id);
-    if (!result) {
-        await ProductionPlan.deleteOne({ _id: req.params.id });
-    }
+    if (!result) await ProductionPlan.deleteOne({ _id: req.params.id });
     res.json({ success: true, msg: 'Plan deleted' });
   } catch (error) {
     try {

@@ -1,14 +1,11 @@
+// backend/models/Order.js
 const mongoose = require('mongoose');
 
 const OrderSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
   
-  // Keep your existing field
   customerName: { type: String, required: true },
-
-  // 🟢 NEW: Added to support .populate('clientId')
-  // This prevents the "Schema hasn't been registered" or "path invalid" errors
-  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, 
+  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' }, // Changed ref to Client (if you have a Client model) or User
   
   items: [
     {
@@ -16,9 +13,17 @@ const OrderSchema = new mongoose.Schema({
       productName: String,
       qtyOrdered: Number,
       qtyAllocated: Number,
-      qtyToProduce: Number
+      qtyToProduce: Number,
+      
+      // 🟢 NEW: Financial Fields
+      unitPrice: { type: Number, default: 0 },
+      itemTotal: { type: Number, default: 0 } 
     }
   ],
+
+  // 🟢 NEW: Order Total
+  grandTotal: { type: Number, default: 0 },
+
   deliveryDate: Date,
   priority: { type: String, enum: ['Low', 'Medium', 'High'], default: 'Medium' },
   
@@ -28,7 +33,6 @@ const OrderSchema = new mongoose.Schema({
     default: 'Pending' 
   },
 
-  // 🟢 NEW: Added to store Transport details so shipOrder() doesn't crash
   dispatchDetails: {
       vehicleNo: String,
       trackingId: String,

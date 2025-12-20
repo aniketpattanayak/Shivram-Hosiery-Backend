@@ -1,3 +1,4 @@
+// backend/controllers/salesController.js
 const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
@@ -14,11 +15,15 @@ exports.createOrder = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { customerName, items, deliveryDate, priority } = req.body;
+    // 🟢 UPDATED: Added 'customerId' to destructuring
+    const { customerName, customerId, items, deliveryDate, priority } = req.body;
     
     const processedItems = [];
     let isProductionTriggered = false;
     const productionPlansToCreate = [];
+    
+    // 🟢 NEW: Variable to track total order value
+    let grandTotal = 0;
 
     for (const item of items) {
       const product = await Product.findOne({ name: item.productName }).session(session);
@@ -27,6 +32,7 @@ exports.createOrder = async (req, res) => {
         throw new Error(`Product '${item.productName}' not found in Master.`);
       }
 
+      // --- STOCK LOGIC (UNCHANGED) ---
       const currentWarehouse = product.stock?.warehouse || 0;
       const currentReserved = product.stock?.reserved || 0;
       const availableStock = currentWarehouse - currentReserved;
@@ -61,12 +67,21 @@ exports.createOrder = async (req, res) => {
         });
       }
 
+      // 🟢 NEW: FINANCIAL LOGIC
+      // Use the price sent from frontend, or fallback to Product Master price
+      const finalPrice = item.unitPrice !== undefined ? Number(item.unitPrice) : (product.sellingPrice || 0);
+      const lineTotal = finalPrice * Number(item.qtyOrdered);
+      grandTotal += lineTotal;
+
       processedItems.push({
         product: product._id,
         productName: product.name,
         qtyOrdered: item.qtyOrdered,
         qtyAllocated: allocatedFromStock,
-        qtyToProduce: sendToProduction
+        qtyToProduce: sendToProduction,
+        // 🟢 Save Financials per item
+        unitPrice: finalPrice,
+        itemTotal: lineTotal
       });
     }
 
@@ -76,7 +91,11 @@ exports.createOrder = async (req, res) => {
     const newOrder = new Order({
       orderId: orderId,
       customerName: customerName,
+      // 🟢 Save Client Link
+      clientId: customerId || null, 
       items: processedItems,
+      // 🟢 Save Total
+      grandTotal: grandTotal, 
       deliveryDate: deliveryDate,
       priority: priority || 'Medium',
       status: isProductionTriggered ? 'Production_Queued' : 'Ready_Dispatch'

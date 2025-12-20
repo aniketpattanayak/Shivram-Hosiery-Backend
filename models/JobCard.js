@@ -10,6 +10,10 @@ const JobCardSchema = new mongoose.Schema({
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   
+  // 🟢 CRITICAL FIELDS
+  vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
+  unitCost: { type: Number, default: 0 },
+
   type: { 
     type: String, 
     enum: ['In-House', 'Job-Work', 'Full-Buy'], 
@@ -24,14 +28,13 @@ const JobCardSchema = new mongoose.Schema({
     default: 'Pending' 
   },
   
-  // 🟢 NEW: Added 'Packaging_Started' to the flow
   currentStep: { 
     type: String, 
     enum: [
       'Material_Pending', 
       'Cutting_Started', 
       'Sewing_Started', 
-      'Packaging_Started', // <--- Added this
+      'Packaging_Started',
       'QC_Pending', 
       'QC_Completed',
       'Procurement_Pending', 

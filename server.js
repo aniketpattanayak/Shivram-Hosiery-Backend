@@ -60,6 +60,7 @@ app.use('/api/sales/quotes', require('./routes/quotationRoutes'));
 app.use('/api/sales/expenses', require('./routes/expenseRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/master', require('./routes/masterRoutes'));
+app.use('/api/roles', require('./routes/roleRoutes'));
 
 
 // Socket Events

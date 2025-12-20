@@ -1,31 +1,55 @@
 const Expense = require('../models/Expense');
 
-// @desc    Log a New Expense
+// @desc    Log New Expense(s) - Supports Single or Batch
 // @route   POST /api/sales/expenses
 exports.createExpense = async (req, res) => {
   try {
-    const { salesPerson, date, category, amount, description } = req.body;
+    const body = req.body;
+    
+    // 1. Normalize Data: Ensure we are working with an Array
+    // If frontend sends { ... }, make it [{ ... }]
+    // If frontend sends [{ ... }, { ... }], keep it as is.
+    const items = Array.isArray(body) ? body : [body];
 
-    const count = await Expense.countDocuments();
-    const expenseId = `EXP-${String(count + 1).padStart(4, '0')}`;
+    if (items.length === 0) {
+        return res.status(400).json({ msg: "No expense data provided" });
+    }
 
-    const newExpense = await Expense.create({
-      expenseId,
-      salesPerson,
-      date,
-      category,
-      amount,
-      description
+    // 2. Get Starting Count for ID Generation
+    let currentCount = await Expense.countDocuments();
+
+    // 3. Prepare Batch Data with IDs
+    const expensesToSave = items.map(item => {
+        currentCount++; // Increment for unique IDs
+        const expenseId = `EXP-${String(currentCount).padStart(4, '0')}`;
+        
+        return {
+            expenseId,
+            salesPerson: item.salesPerson,
+            date: item.date,
+            category: item.category,
+            amount: Number(item.amount),
+            description: item.description,
+            status: 'Pending' // Default
+        };
     });
 
-    res.status(201).json(newExpense);
+    // 4. Bulk Insert (One DB Call)
+    const result = await Expense.insertMany(expensesToSave);
+
+    res.status(201).json({ 
+        success: true, 
+        msg: `Successfully logged ${result.length} expense(s).`, 
+        data: result 
+    });
+
   } catch (error) {
+    console.error("Expense Error:", error);
     res.status(500).json({ msg: error.message });
   }
 };
 
-// @desc    Get All Expenses (Sorted by Newest)
-// @route   GET /api/sales/expenses
+// ... (Keep getExpenses and updateExpenseStatus exactly as they were) ...
 exports.getExpenses = async (req, res) => {
   try {
     const expenses = await Expense.find().sort({ createdAt: -1 });
@@ -35,13 +59,10 @@ exports.getExpenses = async (req, res) => {
   }
 };
 
-// @desc    Approve or Reject Expense
-// @route   PUT /api/sales/expenses/:id/status
 exports.updateExpenseStatus = async (req, res) => {
   try {
-    const { status, reason } = req.body; // status = 'Approved' or 'Rejected'
+    const { status, reason } = req.body;
     const expense = await Expense.findById(req.params.id);
-
     if (!expense) return res.status(404).json({ msg: "Expense not found" });
 
     expense.status = status;

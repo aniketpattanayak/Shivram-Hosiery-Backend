@@ -12,20 +12,19 @@ const ProductionPlanSchema = new mongoose.Schema({
     default: 'Pending Strategy' 
   },
 
-  // 🟢 IMPORTANT: Ensure this says 'mode', NOT 'type'
   splits: [
     {
-      _id: false,
+      _id: false, // Prevents creating a sub-ID for every split to keep it clean
       qty: { type: Number, required: true },
       
-      // 👇 This is the field causing the error. It must be 'mode'.
+      // 'mode' determines if it is Manufacturing or Buying
       mode: { type: String, enum: ['Manufacturing', 'Full-Buy'], required: true }, 
       
-      // If Full-Buy
-      vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor' },
+      // 🟢 CRITICAL: Fields for Full-Buy (Trading)
+      vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
       cost: { type: Number, default: 0 },
 
-      // If Manufacturing
+      // Fields for Manufacturing Routing
       routing: {
         cutting: { 
           type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' },

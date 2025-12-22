@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const connectDB = require('./config/db');
 
+
 // Config
 dotenv.config();
 connectDB();
@@ -61,7 +62,7 @@ app.use('/api/sales/expenses', require('./routes/expenseRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/master', require('./routes/masterRoutes'));
 app.use('/api/roles', require('./routes/roleRoutes'));
-
+app.use('/api/logistics', require('./routes/logisticsRoutes'));
 
 // Socket Events
 io.on('connection', (socket) => {

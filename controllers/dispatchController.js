@@ -12,7 +12,7 @@ exports.getDispatchOrders = async (req, res) => {
       
     res.json(orders);
   } catch (error) {
-    console.error("Dispatch Error:", error); // Check terminal for specific error
+    console.error("Dispatch Error:", error); 
     res.status(500).json({ msg: error.message });
   }
 };
@@ -22,25 +22,34 @@ exports.shipOrder = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
+    // 🟢 Receiving transportDetails which now contains driver info & packing list
     const { orderId, transportDetails } = req.body;
     
     // Find using the readable orderId string (e.g., SO-1234)
     const order = await Order.findOne({ orderId }).session(session);
     if (!order) throw new Error('Order not found');
 
+    // Deduct Stock based on Allocation
     for (const item of order.items) {
       const product = await Product.findById(item.product).session(session);
+      
       // Safety check in case product is missing
       if (product) {
-        product.stock.warehouse -= item.qtyAllocated; 
-        product.stock.reserved -= item.qtyAllocated;
+        // Deduct from Warehouse and Reserved logic
+        // Note: Ensure item.qtyAllocated is populated correctly in your workflow
+        const qtyToDeduct = item.qtyAllocated || item.qtyOrdered; 
+        
+        product.stock.warehouse -= qtyToDeduct; 
+        product.stock.reserved -= qtyToDeduct;
+        
         await product.save({ session });
       }
     }
 
     order.status = 'Dispatched';
     
-    // Save dispatch details (Now supported by Schema)
+    // 🟢 SAVE DISPATCH DETAILS
+    // The spread operator (...) automatically copies vehicleNo, trackingId, driverName, etc.
     order.dispatchDetails = {
         ...transportDetails,
         dispatchedAt: new Date()

@@ -4,41 +4,33 @@ const ProductionPlanSchema = new mongoose.Schema({
   planId: { type: String, required: true, unique: true }, 
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order', required: true },
   product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  
   totalQtyToMake: { type: Number, required: true },
   
+  // 🟢 NEW: PROGRESS TRACKING
+  plannedQty: { type: Number, default: 0 }, 
+  linkedJobIds: [{ type: String }], // e.g. ["JC-IN-101", "JC-IN-102"]
+
   status: { 
     type: String, 
-    enum: ['Pending Strategy', 'Scheduled', 'In Progress', 'Completed'], 
+    enum: ['Pending Strategy', 'Partially Planned', 'Scheduled', 'In Progress', 'Completed'], 
     default: 'Pending Strategy' 
   },
 
   splits: [
     {
-      _id: false, // Prevents creating a sub-ID for every split to keep it clean
+      _id: false,
       qty: { type: Number, required: true },
-      
-      // 'mode' determines if it is Manufacturing or Buying
       mode: { type: String, enum: ['Manufacturing', 'Full-Buy'], required: true }, 
-      
-      // 🟢 CRITICAL: Fields for Full-Buy (Trading)
       vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
       cost: { type: Number, default: 0 },
-
-      // Fields for Manufacturing Routing
       routing: {
-        cutting: { 
-          type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' },
-          vendorName: { type: String, default: '' }
-        },
-        stitching: { 
-          type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' },
-          vendorName: { type: String, default: '' }
-        },
-        packing: { 
-          type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' },
-          vendorName: { type: String, default: '' }
-        }
-      }
+        cutting: { type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' }, vendorName: { type: String, default: '' } },
+        stitching: { type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' }, vendorName: { type: String, default: '' } },
+        packing: { type: { type: String, enum: ['In-House', 'Job Work'], default: 'In-House' }, vendorName: { type: String, default: '' } }
+      },
+      // Track when this specific split was created
+      createdAt: { type: Date, default: Date.now }
     }
   ],
 

@@ -1,4 +1,3 @@
-// backend/controllers/salesController.js
 const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
@@ -15,14 +14,12 @@ exports.createOrder = async (req, res) => {
   session.startTransaction();
 
   try {
-    // 🟢 UPDATED: Added 'customerId' to destructuring
     const { customerName, customerId, items, deliveryDate, priority } = req.body;
     
     const processedItems = [];
     let isProductionTriggered = false;
     const productionPlansToCreate = [];
     
-    // 🟢 NEW: Variable to track total order value
     let grandTotal = 0;
 
     for (const item of items) {
@@ -67,8 +64,7 @@ exports.createOrder = async (req, res) => {
         });
       }
 
-      // 🟢 NEW: FINANCIAL LOGIC
-      // Use the price sent from frontend, or fallback to Product Master price
+      // FINANCIAL LOGIC
       const finalPrice = item.unitPrice !== undefined ? Number(item.unitPrice) : (product.sellingPrice || 0);
       const lineTotal = finalPrice * Number(item.qtyOrdered);
       grandTotal += lineTotal;
@@ -79,7 +75,6 @@ exports.createOrder = async (req, res) => {
         qtyOrdered: item.qtyOrdered,
         qtyAllocated: allocatedFromStock,
         qtyToProduce: sendToProduction,
-        // 🟢 Save Financials per item
         unitPrice: finalPrice,
         itemTotal: lineTotal
       });
@@ -91,10 +86,8 @@ exports.createOrder = async (req, res) => {
     const newOrder = new Order({
       orderId: orderId,
       customerName: customerName,
-      // 🟢 Save Client Link
       clientId: customerId || null, 
       items: processedItems,
-      // 🟢 Save Total
       grandTotal: grandTotal, 
       deliveryDate: deliveryDate,
       priority: priority || 'Medium',
@@ -138,7 +131,16 @@ exports.getOrders = async (req, res) => {
 
 exports.getLeads = async (req, res) => {
   try {
-    const leads = await Lead.find().sort({ createdAt: -1 });
+    let query = {};
+
+    // 🟢 NAME-BASED FILTERING
+    // Only apply filter if user is strictly "Sales Man" or "Salesman"
+    // We match req.user.name (from token) with the 'salesPerson' string field
+    if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
+        query.salesPerson = req.user.name;
+    }
+
+    const leads = await Lead.find(query).sort({ createdAt: -1 });
     res.json(leads);
   } catch (error) {
     res.status(500).json({ msg: error.message });
@@ -150,13 +152,20 @@ exports.createLead = async (req, res) => {
     const count = await Lead.countDocuments();
     const leadId = `LD-${String(count + 1).padStart(3, '0')}`;
 
+    // 🟢 Auto-assign Name if Sales Man creates it
+    let salesPersonName = req.body.salesPerson;
+    if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
+        salesPersonName = req.user.name;
+    }
+
     const newLead = await Lead.create({
       ...req.body,
+      salesPerson: salesPersonName, // Ensure name consistency
       leadId,
       activityLog: [{ 
         status: 'New', 
         remarks: 'Lead Created in System', 
-        updatedBy: req.body.salesPerson 
+        updatedBy: req.user ? req.user.name : 'System' 
       }]
     });
     
@@ -190,7 +199,15 @@ exports.updateLeadActivity = async (req, res) => {
 
 exports.getClients = async (req, res) => {
   try {
-    const clients = await Client.find().sort({ createdAt: -1 });
+    let query = {};
+
+    // 🟢 NAME-BASED FILTERING FOR CLIENTS
+    // Same logic: If Sales Man, filtering by Name string
+    if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
+        query.salesPerson = req.user.name;
+    }
+
+    const clients = await Client.find(query).sort({ createdAt: -1 });
     res.json(clients);
   } catch (error) {
     res.status(500).json({ msg: error.message });
@@ -199,29 +216,33 @@ exports.getClients = async (req, res) => {
 
 exports.createClient = async (req, res) => {
   try {
-    const newClient = await Client.create(req.body);
+    // 🟢 Auto-assign Name if Sales Man creates it
+    let salesPersonName = req.body.salesPerson;
+    if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
+        salesPersonName = req.user.name;
+    }
+
+    const newClient = await Client.create({
+        ...req.body,
+        salesPerson: salesPersonName
+    });
     res.status(201).json(newClient);
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
 };
 
-// 🟢 NEW FUNCTION: Update Client Activity & Status
 // @route   PUT /api/sales/clients/:id
 exports.updateClient = async (req, res) => {
   try {
     const { status, lastActivity } = req.body;
     
-    // 1. Find Client
     const client = await Client.findById(req.params.id);
     if (!client) return res.status(404).json({ msg: 'Client not found' });
 
-    // 2. Update Status if provided
     if (status) client.status = status;
 
-    // 3. Add to Activity Log if provided
     if (lastActivity) {
-      // Ensure activityLog array exists (for older records)
       if (!client.activityLog) client.activityLog = [];
       
       client.activityLog.push({

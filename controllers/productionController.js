@@ -167,8 +167,7 @@ exports.confirmStrategy = async (req, res) => {
   }
 };
 
-
-// 🟢 STRICT UPDATE: Hide 'Material_Pending' from Shop Floor
+// @desc    Get Active Jobs (Shop Floor) - STRICT FILTER (No Material_Pending)
 exports.getActiveJobs = async (req, res) => {
   try {
     const jobs = await JobCard.find({ 
@@ -192,21 +191,14 @@ exports.getActiveJobs = async (req, res) => {
   }
 };
 
-// ... (keep the rest of the file same)
-
-// 🟢 NEW: Get Jobs for Kitting (Material_Pending)
-// backend/controllers/productionController.js
-
-// ... (Keep existing imports)
-
-// 🟢 NEW: Get Kitting Jobs (Updated to ensure BOM is fully loaded)
+// @desc    Get Jobs for Kitting (Material_Pending)
 exports.getKittingJobs = async (req, res) => {
   try {
     const jobs = await JobCard.find({ currentStep: 'Material_Pending' })
-      .populate('orderId') // Get Order Details
+      .populate('orderId') 
       .populate({
           path: 'productId',
-          populate: { path: 'bom.material' } // Deep populate to get stock & batches
+          populate: { path: 'bom.material' } 
       })
       .sort({ createdAt: -1 });
     res.json(jobs);
@@ -215,7 +207,7 @@ exports.getKittingJobs = async (req, res) => {
   }
 };
 
-// 🟢 NEW: Issue Materials with LOT MANAGEMENT
+// @desc    Issue Materials with LOT MANAGEMENT
 exports.issueMaterials = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -237,30 +229,24 @@ exports.issueMaterials = async (req, res) => {
             const materialDoc = await Material.findById(item.materialId).session(session);
             if (!materialDoc) throw new Error(`Material not found: ${item.materialName}`);
 
-            // 🔴 Check Global Stock
+            // Check Global Stock
             if (materialDoc.stock.current < item.issueQty) {
                 throw new Error(`Insufficient Stock for ${materialDoc.name}. Available: ${materialDoc.stock.current}`);
             }
 
-            // 🔴 DEDUCT FROM SPECIFIC BATCH (If provided) or FIFO
+            // Deduct from specific batch or FIFO
             let remainingToDeduct = Number(item.issueQty);
-            let batchInfo = "FIFO"; 
 
             if (item.lotNumber) {
-               // Deduct from specific batch
                const batchIndex = materialDoc.stock.batches.findIndex(b => b.lotNumber === item.lotNumber);
                if (batchIndex > -1) {
                   if(materialDoc.stock.batches[batchIndex].qty >= remainingToDeduct) {
                       materialDoc.stock.batches[batchIndex].qty -= remainingToDeduct;
-                      batchInfo = item.lotNumber;
                   } else {
                       throw new Error(`Batch ${item.lotNumber} only has ${materialDoc.stock.batches[batchIndex].qty}, but you tried to issue ${remainingToDeduct}`);
                   }
                }
-            } else {
-               // FIFO Logic: Deduct from oldest batches first (optional, for now we just deduct global count if no lot selected)
-               // You can expand this logic later.
-            }
+            } 
 
             // Update Global Count
             materialDoc.stock.current -= remainingToDeduct;
@@ -275,7 +261,7 @@ exports.issueMaterials = async (req, res) => {
                 materialId: item.materialId,
                 materialName: item.materialName,
                 qtyIssued: Number(item.issueQty),
-                lotNumber: item.lotNumber || "General Stock", // <--- Save Lot Number
+                lotNumber: item.lotNumber || "General Stock",
                 issuedTo: item.issuedTo,
                 issuedBy: issuerName || "Store Manager",
                 role: issuerRole || "Store",
@@ -311,6 +297,21 @@ exports.issueMaterials = async (req, res) => {
     res.status(500).json({ msg: error.message });
   } finally {
     session.endSession();
+  }
+};
+
+// 🟢 NEW: Get Global Issue History (Flattened List for Kitting Dashboard)
+exports.getIssueHistory = async (req, res) => {
+  try {
+    // Fetch all jobs that have ANY issued materials
+    const jobs = await JobCard.find({ "issuedMaterials.0": { $exists: true } })
+      .populate('productId', 'name sku') 
+      .select('jobId productId issuedMaterials totalQty createdAt') // Select only needed fields
+      .sort({ updatedAt: -1 }); // Show recently updated jobs first
+
+    res.json(jobs);
+  } catch (error) {
+    res.status(500).json({ msg: error.message });
   }
 };
 

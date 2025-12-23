@@ -4,17 +4,19 @@ const {
   confirmStrategy, 
   getPendingPlans, 
   getActiveJobs,
-  getKittingJobs,   // <--- New
-  issueMaterials,   // <--- New
+  getKittingJobs, 
+  issueMaterials,
+  getIssueHistory, // 🟢 Import New Function
   deletePlan 
 } = require('../controllers/productionController');
 
 router.get('/pending', getPendingPlans);
 router.get('/jobs', getActiveJobs);
-router.get('/kitting', getKittingJobs); // <--- Kitting List
+router.get('/kitting', getKittingJobs); 
+router.get('/kitting/history', getIssueHistory); // 🟢 Add New Route for Global History
 
 router.post('/confirm-strategy', confirmStrategy);
-router.post('/kitting/issue', issueMaterials); // <--- Kitting Action
+router.post('/kitting/issue', issueMaterials);
 
 router.delete('/:id', deletePlan); 
 

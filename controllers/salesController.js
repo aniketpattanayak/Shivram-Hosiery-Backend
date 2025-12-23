@@ -264,14 +264,17 @@ exports.updateClient = async (req, res) => {
     }
 
     // 4. Apply CRM Updates (Allowed for Everyone)
-    if (status) client.status = status;
+    // 🟢 AUTOMATIC HISTORY LOGGING
+    if (status || lastActivity) {
+      if (status) client.status = status;
 
-    if (lastActivity) {
       if (!client.activityLog) client.activityLog = [];
       
       client.activityLog.push({
-        type: lastActivity.type,
-        remark: lastActivity.remark,
+        updatedBy: req.user.name, // <--- Capture User Name from Token
+        status: status || client.status,
+        type: lastActivity?.type || 'Update',
+        remark: lastActivity?.remark || 'Status Updated',
         date: new Date()
       });
     }

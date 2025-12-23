@@ -19,15 +19,18 @@ const ClientSchema = new mongoose.Schema({
 
   salesPerson: { type: String, required: true }, // Who owns this client?
 
-  // 🟢 NEW: CRM Fields (Status & History)
+  // 🟢 CRM Fields (Status & History)
   status: { 
     type: String, 
     default: 'Active', 
     enum: ['Interested', 'Approach', 'Negotiation', 'Order Won', 'Order Lost', 'Cold Stage', 'Customer', 'Customer', 'Active'] 
   },
   
+  // 🟢 UPDATED HISTORY LOG
   activityLog: [{
-    type: { type: String }, // Call, Visit, Email
+    updatedBy: { type: String }, // Stores "Admin" or "Pramod"
+    status: { type: String },    // Stores snapshot of status
+    type: { type: String },      // Call, Visit, Email, Update
     remark: { type: String },
     date: { type: Date, default: Date.now }
   }]

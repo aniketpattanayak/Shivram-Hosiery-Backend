@@ -29,7 +29,7 @@ exports.createOrder = async (req, res) => {
         throw new Error(`Product '${item.productName}' not found in Master.`);
       }
 
-      // --- STOCK LOGIC (UNCHANGED) ---
+      // --- STOCK LOGIC ---
       const currentWarehouse = product.stock?.warehouse || 0;
       const currentReserved = product.stock?.reserved || 0;
       const availableStock = currentWarehouse - currentReserved;
@@ -134,8 +134,6 @@ exports.getLeads = async (req, res) => {
     let query = {};
 
     // 🟢 NAME-BASED FILTERING
-    // Only apply filter if user is strictly "Sales Man" or "Salesman"
-    // We match req.user.name (from token) with the 'salesPerson' string field
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         query.salesPerson = req.user.name;
     }
@@ -160,7 +158,7 @@ exports.createLead = async (req, res) => {
 
     const newLead = await Lead.create({
       ...req.body,
-      salesPerson: salesPersonName, // Ensure name consistency
+      salesPerson: salesPersonName, 
       leadId,
       activityLog: [{ 
         status: 'New', 
@@ -201,8 +199,7 @@ exports.getClients = async (req, res) => {
   try {
     let query = {};
 
-    // 🟢 NAME-BASED FILTERING FOR CLIENTS
-    // Same logic: If Sales Man, filtering by Name string
+    // 🟢 1. VIEW RESTRICTION: Salesman sees ONLY his assigned clients
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         query.salesPerson = req.user.name;
     }
@@ -235,11 +232,38 @@ exports.createClient = async (req, res) => {
 // @route   PUT /api/sales/clients/:id
 exports.updateClient = async (req, res) => {
   try {
-    const { status, lastActivity } = req.body;
+    // 1. Destructure all potential inputs
+    const { 
+      name, gstNumber, address, contactPerson, contactNumber, email, paymentTerms, salesPerson, // Master Fields
+      status, lastActivity // CRM Fields
+    } = req.body;
     
     const client = await Client.findById(req.params.id);
     if (!client) return res.status(404).json({ msg: 'Client not found' });
 
+    // 🟢 2. EDIT RESTRICTION: 
+    // Check if user is trying to update Master Fields
+    const isMasterUpdate = name || gstNumber || address || contactPerson || email || paymentTerms || salesPerson;
+    const isAdmin = req.user && req.user.role === 'Admin';
+
+    // If trying to update Master Data and NOT Admin -> Block it
+    if (isMasterUpdate && !isAdmin) {
+        return res.status(403).json({ msg: "Access Denied: Only Admins can edit Client Master details." });
+    }
+
+    // 3. Apply Master Updates (Only if Admin)
+    if (isAdmin) {
+        if (name) client.name = name;
+        if (gstNumber) client.gstNumber = gstNumber;
+        if (address) client.address = address;
+        if (contactPerson) client.contactPerson = contactPerson;
+        if (contactNumber) client.contactNumber = contactNumber;
+        if (email) client.email = email;
+        if (paymentTerms) client.paymentTerms = paymentTerms;
+        if (salesPerson) client.salesPerson = salesPerson;
+    }
+
+    // 4. Apply CRM Updates (Allowed for Everyone)
     if (status) client.status = status;
 
     if (lastActivity) {

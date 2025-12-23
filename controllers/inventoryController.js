@@ -30,8 +30,6 @@ exports.issueMaterial = async (req, res) => {
       material.stock.current -= qtyNeeded;
       material.stock.reserved -= qtyNeeded;
       
-      // Note: You might need to add logic here to deduct from 'batches' for FCFO later
-      
       await material.save({ session });
     }
 
@@ -80,23 +78,21 @@ exports.approveQC = async (req, res) => {
 // @desc    Get Live Stock (For Inventory Page)
 exports.getStock = async (req, res) => {
   try {
-    const materials = await Material.find();
+    const materials = await Material.find().sort({ name: 1 });
     res.json(materials);
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
 };
 
-// @desc    Add New Raw Material (Renamed/Updated to match new Frontend)
-// ... imports
-
+// @desc    Add New Raw Material
 exports.addMaterial = async (req, res) => {
   try {
     const { 
       materialId, name, materialType, unit, 
       costPerUnit, reorderLevel, openingStock,
       batchNumber,
-      // 🟢 NEW INPUTS
+      // New Metrics
       avgConsumption, leadTime, safetyStock 
     } = req.body;
     
@@ -114,8 +110,6 @@ exports.addMaterial = async (req, res) => {
       });
     }
 
-    // Create Material
-    // Note: 'stockAtLeast' and 'status' will be calculated by the Pre-Save Hook!
     const material = await Material.create({
       materialId,
       name,
@@ -123,7 +117,7 @@ exports.addMaterial = async (req, res) => {
       unit,
       costPerUnit: Number(costPerUnit) || 0,
       
-      // 🟢 Save New Metrics
+      // Save Metrics
       avgConsumption: Number(avgConsumption) || 0,
       leadTime: Number(leadTime) || 0,
       safetyStock: Number(safetyStock) || 0,
@@ -142,7 +136,24 @@ exports.addMaterial = async (req, res) => {
   }
 };
 
+// 🟢 NEW: FORCE RECALCULATION (Fixes the Calculation Discrepancy)
+exports.recalculateAll = async (req, res) => {
+  try {
+    const materials = await Material.find();
+    
+    // Loop through every material and save it.
+    // This triggers the 'pre-save' hook in the Model, applying the new Math.
+    for (const mat of materials) {
+        await mat.save();
+    }
 
-// Ensure exports match your route requirements. 
-// If your route file uses 'createMaterial', alias it here:
+    res.json({ success: true, msg: `Recalculated ${materials.length} items with new formula.` });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ msg: error.message });
+  }
+};
+
+// Aliases
 exports.createMaterial = exports.addMaterial;
+exports.getAllStock = exports.getStock; // Ensure compatibility

@@ -10,7 +10,6 @@ const JobCardSchema = new mongoose.Schema({
   orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   
-  // 🟢 CRITICAL FIELDS
   vendorId: { type: mongoose.Schema.Types.ObjectId, ref: 'Vendor', default: null },
   unitCost: { type: Number, default: 0 },
 
@@ -27,8 +26,7 @@ const JobCardSchema = new mongoose.Schema({
     enum: [
       'Pending', 'In_Progress', 'Completed', 
       'QC_Pending', 'QC_Passed', 'QC_Failed', 
-      'QC_HOLD',      // <--- Existing
-      'QC_Rejected'   // <--- 🟢 ADDED (For Admin Rejection)
+      'QC_HOLD', 'QC_Rejected'
     ], 
     default: 'Pending' 
   },
@@ -36,7 +34,8 @@ const JobCardSchema = new mongoose.Schema({
   currentStep: { 
     type: String, 
     enum: [
-      'Material_Pending', 
+      'Material_Pending',     // Kitting Stage
+      'Cutting_Pending',      // Next Stage
       'Cutting_Started', 
       'Sewing_Started', 
       'Packaging_Started',
@@ -45,13 +44,31 @@ const JobCardSchema = new mongoose.Schema({
       'Procurement_Pending', 
       'PO_Raised',
       'QC_Review_Needed',
-      'Scrapped'      // <--- 🟢 ADDED (For Rejected Batches)
+      'Scrapped'
     ],
     default: 'Material_Pending' 
   },
 
-  // 🟢 NEW: QC RESULT DATA (The Missing Piece!)
-  // This stores the Rejection Rate, Note, and Inspector Name
+  // KITTING & STORE DATA
+  customBOM: [{ 
+    materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' }, 
+    materialName: String, 
+    unit: String,
+    requiredQty: Number 
+  }],
+
+  issuedMaterials: [{ 
+    materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
+    materialName: String,
+    qtyIssued: Number,
+    issuedTo: String,   
+    issuedBy: String,   
+    role: String,     
+    remarks: String,
+    date: { type: Date, default: Date.now }
+  }],
+
+  // QC RESULT DATA 
   qcResult: {
     totalBatchQty: Number,
     sampleSize: Number,
@@ -64,23 +81,22 @@ const JobCardSchema = new mongoose.Schema({
     date: Date
   },
 
-  // Routing (Who does what?)
+  // 🟢 FIXED ROUTING ENUMS (Allows both "Job Work" and "Job-Work")
   routing: {
     cutting: { 
-      type: { type: String, enum: ['In-House', 'Job Work'] },
+      type: { type: String, enum: ['In-House', 'Job Work', 'Job-Work'] }, 
       vendorName: String 
     },
     stitching: { 
-      type: { type: String, enum: ['In-House', 'Job Work'] },
+      type: { type: String, enum: ['In-House', 'Job Work', 'Job-Work'] }, 
       vendorName: String 
     },
     packing: { 
-      type: { type: String, enum: ['In-House', 'Job Work'] },
+      type: { type: String, enum: ['In-House', 'Job Work', 'Job-Work'] }, 
       vendorName: String 
     }
   },
 
-  // Permanent Timeline
   timeline: [
     {
       stage: String,
@@ -92,16 +108,6 @@ const JobCardSchema = new mongoose.Schema({
     }
   ],
 
-  // Backward Compatibility
-  issuedMaterials: [
-      {
-          materialName: String,
-          lotNumber: String,
-          qtyIssued: Number,
-          issuedAt: { type: Date, default: Date.now }
-      }
-  ],
-  
   history: [{
     step: String,
     status: String,

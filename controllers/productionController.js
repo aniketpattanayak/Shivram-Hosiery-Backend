@@ -3,6 +3,7 @@ const Product = require('../models/Product');
 const ProductionPlan = require('../models/ProductionPlan');
 const JobCard = require('../models/JobCard');
 const Vendor = require('../models/Vendor');
+const Material = require('../models/Material'); // 🟢 Required for Kitting
 
 // @desc    Get All Products
 exports.getProducts = async (req, res) => {
@@ -46,14 +47,12 @@ exports.deleteProduct = async (req, res) => {
 // @desc    Get Pending Plans (Includes Partially Planned)
 exports.getPendingPlans = async (req, res) => {
   try {
-    // 🟢 Fetch 'Pending Strategy' AND 'Partially Planned'
     const plans = await ProductionPlan.find({ 
       status: { $in: ['Pending Strategy', 'Partially Planned'] } 
     })
       .populate('orderId') 
       .populate('product')
       .sort({ createdAt: -1 });
-      
     res.json(plans);
   } catch (error) {
     console.error("Error fetching pending plans:", error);
@@ -78,15 +77,14 @@ exports.confirmStrategy = async (req, res) => {
     const alreadyPlanned = plan.plannedQty || 0;
     const remainingQty = plan.totalQtyToMake - alreadyPlanned;
 
-    // 🟢 VALIDATION: Cannot plan more than pending
     if (currentQtyToPlan > remainingQty) {
         throw new Error(`Invalid Qty: You are trying to plan ${currentQtyToPlan}, but only ${remainingQty} units are remaining.`);
     }
 
     const createdJobs = [];
-    const newJobIds = []; // To store IDs like "JC-IN-1001"
+    const newJobIds = []; 
 
-    // 3. Create Job Cards for this Partial Plan
+    // 3. Create Job Cards
     for (const split of splits) {
       if (split.qty <= 0) continue;
 
@@ -114,7 +112,7 @@ exports.confirmStrategy = async (req, res) => {
         vendorId: finalVendorId, 
         unitCost: finalCost,        
         status: 'Pending',
-        currentStep: initialStep,
+        currentStep: initialStep, // <--- Starts at 'Material_Pending' for Kitting
         timeline: [{ 
             stage: 'Created', 
             action: `Partial Plan Created (${split.qty})`, 
@@ -136,16 +134,13 @@ exports.confirmStrategy = async (req, res) => {
     const newPlannedTotal = alreadyPlanned + currentQtyToPlan;
     const isFullyPlanned = newPlannedTotal >= plan.totalQtyToMake;
 
-    // 🟢 Update Fields
     plan.plannedQty = newPlannedTotal;
     plan.status = isFullyPlanned ? 'Scheduled' : 'Partially Planned';
     
-    // Push new job IDs to the existing array
     if(newJobIds.length > 0) {
         plan.linkedJobIds.push(...newJobIds);
     }
     
-    // Add these splits to history
     splits.forEach(s => plan.splits.push({ 
         qty: s.qty, 
         mode: s.mode || s.type, 
@@ -155,7 +150,7 @@ exports.confirmStrategy = async (req, res) => {
     await plan.save({ session });
 
     await session.commitTransaction();
-    console.log(`✅ Partial Planning: ${currentQtyToPlan} units planned. Remaining: ${plan.totalQtyToMake - newPlannedTotal}`);
+    console.log(`✅ Partial Planning: ${currentQtyToPlan} units planned.`);
     
     res.json({ 
         success: true, 
@@ -172,10 +167,21 @@ exports.confirmStrategy = async (req, res) => {
   }
 };
 
-// @desc    Get Active Jobs
+
+// 🟢 STRICT UPDATE: Hide 'Material_Pending' from Shop Floor
 exports.getActiveJobs = async (req, res) => {
   try {
-    const jobs = await JobCard.find({ currentStep: { $ne: 'QC_Completed' } })
+    const jobs = await JobCard.find({ 
+        currentStep: { 
+            // 🟢 ONLY show steps that happen AFTER Kitting
+            $in: [
+                'Cutting_Pending', 'Cutting_Started', 'Cutting_Completed',
+                'Sewing_Pending', 'Sewing_Started', 'Sewing_Completed',
+                'Packaging_Started', 'QC_Pending', 'QC_Review_Needed', 
+                'QC_Completed'
+            ] 
+        } 
+    })
       .populate('productId') 
       .populate({ path: 'planId', populate: { path: 'product' } }) 
       .populate('batchPlans') 
@@ -183,6 +189,128 @@ exports.getActiveJobs = async (req, res) => {
     res.json(jobs);
   } catch (error) {
     res.status(500).json({ msg: error.message });
+  }
+};
+
+// ... (keep the rest of the file same)
+
+// 🟢 NEW: Get Jobs for Kitting (Material_Pending)
+// backend/controllers/productionController.js
+
+// ... (Keep existing imports)
+
+// 🟢 NEW: Get Kitting Jobs (Updated to ensure BOM is fully loaded)
+exports.getKittingJobs = async (req, res) => {
+  try {
+    const jobs = await JobCard.find({ currentStep: 'Material_Pending' })
+      .populate('orderId') // Get Order Details
+      .populate({
+          path: 'productId',
+          populate: { path: 'bom.material' } // Deep populate to get stock & batches
+      })
+      .sort({ createdAt: -1 });
+    res.json(jobs);
+  } catch (error) {
+    res.status(500).json({ msg: error.message });
+  }
+};
+
+// 🟢 NEW: Issue Materials with LOT MANAGEMENT
+exports.issueMaterials = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { jobId, customBOM, materialsToIssue, sendToFloor, issuerName, issuerRole } = req.body;
+    
+    const job = await JobCard.findOne({ jobId }).session(session);
+    if (!job) throw new Error('Job not found');
+
+    // 1. Update Custom BOM
+    if (customBOM && customBOM.length > 0) {
+        job.customBOM = customBOM; 
+    }
+
+    // 2. Process Issues (Inventory Deduction FROM BATCHES)
+    if (materialsToIssue && materialsToIssue.length > 0) {
+        for (const item of materialsToIssue) {
+            const materialDoc = await Material.findById(item.materialId).session(session);
+            if (!materialDoc) throw new Error(`Material not found: ${item.materialName}`);
+
+            // 🔴 Check Global Stock
+            if (materialDoc.stock.current < item.issueQty) {
+                throw new Error(`Insufficient Stock for ${materialDoc.name}. Available: ${materialDoc.stock.current}`);
+            }
+
+            // 🔴 DEDUCT FROM SPECIFIC BATCH (If provided) or FIFO
+            let remainingToDeduct = Number(item.issueQty);
+            let batchInfo = "FIFO"; 
+
+            if (item.lotNumber) {
+               // Deduct from specific batch
+               const batchIndex = materialDoc.stock.batches.findIndex(b => b.lotNumber === item.lotNumber);
+               if (batchIndex > -1) {
+                  if(materialDoc.stock.batches[batchIndex].qty >= remainingToDeduct) {
+                      materialDoc.stock.batches[batchIndex].qty -= remainingToDeduct;
+                      batchInfo = item.lotNumber;
+                  } else {
+                      throw new Error(`Batch ${item.lotNumber} only has ${materialDoc.stock.batches[batchIndex].qty}, but you tried to issue ${remainingToDeduct}`);
+                  }
+               }
+            } else {
+               // FIFO Logic: Deduct from oldest batches first (optional, for now we just deduct global count if no lot selected)
+               // You can expand this logic later.
+            }
+
+            // Update Global Count
+            materialDoc.stock.current -= remainingToDeduct;
+            
+            // Clean up empty batches
+            materialDoc.stock.batches = materialDoc.stock.batches.filter(b => b.qty > 0);
+
+            await materialDoc.save({ session });
+
+            // Log to Job History
+            job.issuedMaterials.push({
+                materialId: item.materialId,
+                materialName: item.materialName,
+                qtyIssued: Number(item.issueQty),
+                lotNumber: item.lotNumber || "General Stock", // <--- Save Lot Number
+                issuedTo: item.issuedTo,
+                issuedBy: issuerName || "Store Manager",
+                role: issuerRole || "Store",
+                remarks: item.remarks,
+                date: new Date()
+            });
+        }
+    }
+
+    // 3. Move to Shop Floor (If Requested)
+    if (sendToFloor) {
+        job.currentStep = 'Cutting_Pending';
+        job.history.push({
+            step: 'Kitting',
+            status: 'Materials Issued',
+            details: `Full Materials issued by ${issuerName}. Sent to Cutting Floor.`,
+            timestamp: new Date()
+        });
+    }
+
+    await job.save({ session });
+    await session.commitTransaction();
+
+    res.json({ 
+        success: true, 
+        msg: sendToFloor ? 'Job Sent to Cutting Floor! ✂️' : 'Partial Issue Saved ✅',
+        jobId: job.jobId
+    });
+
+  } catch (error) {
+    await session.abortTransaction();
+    console.error("Kitting Error:", error);
+    res.status(500).json({ msg: error.message });
+  } finally {
+    session.endSession();
   }
 };
 

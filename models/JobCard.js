@@ -24,7 +24,12 @@ const JobCardSchema = new mongoose.Schema({
   
   status: { 
     type: String, 
-    enum: ['Pending', 'In_Progress', 'Completed', 'QC_Pending', 'QC_Passed', 'QC_Failed'], 
+    enum: [
+      'Pending', 'In_Progress', 'Completed', 
+      'QC_Pending', 'QC_Passed', 'QC_Failed', 
+      'QC_HOLD',      // <--- Existing
+      'QC_Rejected'   // <--- 🟢 ADDED (For Admin Rejection)
+    ], 
     default: 'Pending' 
   },
   
@@ -38,9 +43,25 @@ const JobCardSchema = new mongoose.Schema({
       'QC_Pending', 
       'QC_Completed',
       'Procurement_Pending', 
-      'PO_Raised'
+      'PO_Raised',
+      'QC_Review_Needed',
+      'Scrapped'      // <--- 🟢 ADDED (For Rejected Batches)
     ],
     default: 'Material_Pending' 
+  },
+
+  // 🟢 NEW: QC RESULT DATA (The Missing Piece!)
+  // This stores the Rejection Rate, Note, and Inspector Name
+  qcResult: {
+    totalBatchQty: Number,
+    sampleSize: Number,
+    passedQty: Number,
+    rejectedQty: Number,
+    defectRate: String,
+    inspectorName: String,
+    status: String,
+    notes: String,
+    date: Date
   },
 
   // Routing (Who does what?)

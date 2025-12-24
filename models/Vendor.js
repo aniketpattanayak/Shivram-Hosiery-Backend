@@ -6,7 +6,7 @@ const VendorSchema = new mongoose.Schema({
   // What kind of vendor is this?
   category: { 
     type: String, 
-    enum: ['Material Supplier', 'Job Worker', 'Full Service Factory'], 
+    enum: ['Material Supplier', 'Job Worker', 'Full Service Factory', 'Trading'], 
     required: true 
   },
 
@@ -19,6 +19,7 @@ const VendorSchema = new mongoose.Schema({
   // Basic Info
   contactPerson: { type: String, default: '' },
   phone: { type: String, default: '' },
+  email: { type: String, default: '' }, // 🟢 Added Email
   gst: { type: String, default: '' },
   address: { type: String, default: '' },
   

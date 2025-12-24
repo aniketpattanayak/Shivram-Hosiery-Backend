@@ -13,6 +13,7 @@ exports.getVendors = async (req, res) => {
 // @desc Add New Vendor
 exports.createVendor = async (req, res) => {
   try {
+    // 🟢 Simply passing req.body works because the Schema now has the new fields
     const vendor = await Vendor.create(req.body);
     res.status(201).json({ success: true, vendor });
   } catch (error) {

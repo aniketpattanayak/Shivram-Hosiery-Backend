@@ -47,6 +47,33 @@ exports.issueMaterial = async (req, res) => {
   }
 };
 
+// 🟢 NEW: Update Raw Material
+exports.updateMaterial = async (req, res) => {
+  try {
+      const { name, costPerUnit, reorderLevel, avgConsumption, leadTime, safetyStock, unit } = req.body;
+      
+      const material = await Material.findById(req.params.id);
+      if (!material) return res.status(404).json({ msg: 'Material not found' });
+
+      if (name) material.name = name;
+      if (unit) material.unit = unit;
+      if (costPerUnit !== undefined) material.costPerUnit = Number(costPerUnit);
+      if (avgConsumption !== undefined) material.avgConsumption = Number(avgConsumption);
+      if (leadTime !== undefined) material.leadTime = Number(leadTime);
+      if (safetyStock !== undefined) material.safetyStock = Number(safetyStock);
+      
+      if (reorderLevel !== undefined) {
+           if (!material.stock) material.stock = {};
+           material.stock.reorderLevel = Number(reorderLevel);
+      }
+
+      await material.save();
+      res.json({ success: true, material });
+  } catch (error) {
+      res.status(500).json({ msg: error.message });
+  }
+};
+
 // @desc    QC Approval (Factory -> Finished Goods)
 exports.approveQC = async (req, res) => {
   const session = await mongoose.startSession();

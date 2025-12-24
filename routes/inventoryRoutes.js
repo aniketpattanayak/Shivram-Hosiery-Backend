@@ -7,7 +7,9 @@ const {
   approveQC, 
   getStock, 
   createMaterial,
-  recalculateAll // 🟢 Import this
+  recalculateAll,
+  // 🟢 Ensure this is imported
+  updateMaterial 
 } = require('../controllers/inventoryController');
 
 // Import Logic from Dispatch Controller
@@ -22,9 +24,11 @@ const {
 router.get('/stock', getStock);              
 router.post('/materials', createMaterial);   
 router.post('/issue-material', issueMaterial); 
-router.post('/qc-pass', approveQC);          
 
-// 🟢 NEW ROUTE TO FIX DATA
+// 🟢 Route for Editing Material
+router.put('/:id', updateMaterial);
+
+router.post('/qc-pass', approveQC);          
 router.post('/recalculate', recalculateAll);
 
 // 2. Dispatch / Logistics

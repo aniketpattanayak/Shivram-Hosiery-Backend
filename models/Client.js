@@ -19,6 +19,23 @@ const ClientSchema = new mongoose.Schema({
 
   salesPerson: { type: String, required: true }, // Who owns this client?
 
+  // 🟢 NEW: Store Multiple Interested Products
+  interestedProducts: [{
+    productName: String,
+    category: String,
+    subCategory: String,
+    fabric: String,
+    color: String,
+    expectedQty: String,
+    targetRate: String
+  }],
+
+  leadType: { 
+    type: String, 
+    default: 'Medium', 
+    enum: ['High', 'Medium', 'Low'] 
+  },
+  
   // 🟢 CRM Fields (Status & History)
   status: { 
     type: String, 

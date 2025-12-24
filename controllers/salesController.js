@@ -14,7 +14,10 @@ exports.createOrder = async (req, res) => {
   session.startTransaction();
 
   try {
-    const { customerName, customerId, items, deliveryDate, priority } = req.body;
+    const { 
+        customerName, customerId, items, deliveryDate, priority,
+        advanceReceived, advanceAmount // 🟢 Capture Advance Info
+    } = req.body;
     
     const processedItems = [];
     let isProductionTriggered = false;
@@ -76,7 +79,8 @@ exports.createOrder = async (req, res) => {
         qtyAllocated: allocatedFromStock,
         qtyToProduce: sendToProduction,
         unitPrice: finalPrice,
-        itemTotal: lineTotal
+        itemTotal: lineTotal,
+        promiseDate: item.promiseDate // 🟢 Save per-item promise date
       });
     }
 
@@ -91,7 +95,9 @@ exports.createOrder = async (req, res) => {
       grandTotal: grandTotal, 
       deliveryDate: deliveryDate,
       priority: priority || 'Medium',
-      status: isProductionTriggered ? 'Production_Queued' : 'Ready_Dispatch'
+      status: isProductionTriggered ? 'Production_Queued' : 'Ready_Dispatch',
+      advanceReceived: advanceReceived || false, // 🟢 Save Advance Info
+      advanceAmount: advanceReceived ? (advanceAmount || 0) : 0
     });
 
     await newOrder.save({ session });
@@ -125,6 +131,7 @@ exports.getOrders = async (req, res) => {
     }
 };
 
+// ... (Keep the rest of Lead and Client controllers exactly as they were) ...
 // ==========================================
 // 2. LEAD MANAGEMENT (CRM)
 // ==========================================
@@ -132,12 +139,9 @@ exports.getOrders = async (req, res) => {
 exports.getLeads = async (req, res) => {
   try {
     let query = {};
-
-    // 🟢 NAME-BASED FILTERING
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         query.salesPerson = req.user.name;
     }
-
     const leads = await Lead.find(query).sort({ createdAt: -1 });
     res.json(leads);
   } catch (error) {
@@ -149,13 +153,10 @@ exports.createLead = async (req, res) => {
   try {
     const count = await Lead.countDocuments();
     const leadId = `LD-${String(count + 1).padStart(3, '0')}`;
-
-    // 🟢 Auto-assign Name if Sales Man creates it
     let salesPersonName = req.body.salesPerson;
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         salesPersonName = req.user.name;
     }
-
     const newLead = await Lead.create({
       ...req.body,
       salesPerson: salesPersonName, 
@@ -166,7 +167,6 @@ exports.createLead = async (req, res) => {
         updatedBy: req.user ? req.user.name : 'System' 
       }]
     });
-    
     res.status(201).json(newLead);
   } catch (error) {
     res.status(500).json({ msg: error.message });
@@ -177,13 +177,10 @@ exports.updateLeadActivity = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, remarks, updatedBy } = req.body;
-
     const lead = await Lead.findById(id);
     if (!lead) return res.status(404).json({ msg: "Lead not found" });
-
     lead.status = status;
     lead.activityLog.push({ status, remarks, updatedBy, date: new Date() });
-
     await lead.save();
     res.json(lead);
   } catch (error) {
@@ -197,15 +194,38 @@ exports.updateLeadActivity = async (req, res) => {
 
 exports.getClients = async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const search = req.query.search || "";
+    const skip = (page - 1) * limit;
     let query = {};
-
-    // 🟢 1. VIEW RESTRICTION: Salesman sees ONLY his assigned clients
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         query.salesPerson = req.user.name;
     }
-
-    const clients = await Client.find(query).sort({ createdAt: -1 });
-    res.json(clients);
+    if (search) {
+      const searchFilter = {
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { gstNumber: { $regex: search, $options: "i" } }
+        ]
+      };
+      if (query.salesPerson) {
+        query = { $and: [{ salesPerson: query.salesPerson }, searchFilter] };
+      } else {
+        query = searchFilter;
+      }
+    }
+    const total = await Client.countDocuments(query);
+    const clients = await Client.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+    res.json({
+      data: clients,
+      total,
+      currentPage: page,
+      hasMore: (page * limit) < total
+    });
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
@@ -213,12 +233,10 @@ exports.getClients = async (req, res) => {
 
 exports.createClient = async (req, res) => {
   try {
-    // 🟢 Auto-assign Name if Sales Man creates it
     let salesPersonName = req.body.salesPerson;
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         salesPersonName = req.user.name;
     }
-
     const newClient = await Client.create({
         ...req.body,
         salesPerson: salesPersonName
@@ -229,29 +247,24 @@ exports.createClient = async (req, res) => {
   }
 };
 
-// @route   PUT /api/sales/clients/:id
 exports.updateClient = async (req, res) => {
   try {
-    // 1. Destructure all potential inputs
     const { 
-      name, gstNumber, address, contactPerson, contactNumber, email, paymentTerms, salesPerson, // Master Fields
-      status, lastActivity // CRM Fields
+      name, gstNumber, address, contactPerson, contactNumber, email, paymentTerms, salesPerson, 
+      interestedProducts, leadType,
+      status, lastActivity 
     } = req.body;
     
     const client = await Client.findById(req.params.id);
     if (!client) return res.status(404).json({ msg: 'Client not found' });
 
-    // 🟢 2. EDIT RESTRICTION: 
-    // Check if user is trying to update Master Fields
-    const isMasterUpdate = name || gstNumber || address || contactPerson || email || paymentTerms || salesPerson;
-    const isAdmin = req.user && req.user.role === 'Admin';
+    const isMasterUpdate = name || gstNumber || address || contactPerson || email || paymentTerms || salesPerson || interestedProducts || leadType;
+    const isAdmin = req.user && (req.user.role === 'Admin' || req.user.role === 'Manager');
 
-    // If trying to update Master Data and NOT Admin -> Block it
     if (isMasterUpdate && !isAdmin) {
         return res.status(403).json({ msg: "Access Denied: Only Admins can edit Client Master details." });
     }
 
-    // 3. Apply Master Updates (Only if Admin)
     if (isAdmin) {
         if (name) client.name = name;
         if (gstNumber) client.gstNumber = gstNumber;
@@ -261,17 +274,15 @@ exports.updateClient = async (req, res) => {
         if (email) client.email = email;
         if (paymentTerms) client.paymentTerms = paymentTerms;
         if (salesPerson) client.salesPerson = salesPerson;
+        if (interestedProducts) client.interestedProducts = interestedProducts;
+        if (leadType) client.leadType = leadType;
     }
 
-    // 4. Apply CRM Updates (Allowed for Everyone)
-    // 🟢 AUTOMATIC HISTORY LOGGING
     if (status || lastActivity) {
       if (status) client.status = status;
-
       if (!client.activityLog) client.activityLog = [];
-      
       client.activityLog.push({
-        updatedBy: req.user.name, // <--- Capture User Name from Token
+        updatedBy: req.user.name,
         status: status || client.status,
         type: lastActivity?.type || 'Update',
         remark: lastActivity?.remark || 'Status Updated',

@@ -3,9 +3,13 @@ const mongoose = require('mongoose');
 const OrderSchema = new mongoose.Schema({
   orderId: { type: String, required: true, unique: true },
   
-  customerName: { type: String, required: true },
-  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' }, 
+  customerName: { type: String, required: true }, // Can be existing Client or New Name
+  clientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Client' }, // Optional (Null if new customer)
   
+  // 🟢 NEW: Advance Payment Fields
+  advanceReceived: { type: Boolean, default: false },
+  advanceAmount: { type: Number, default: 0 },
+
   items: [
     {
       product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
@@ -14,6 +18,9 @@ const OrderSchema = new mongoose.Schema({
       qtyAllocated: Number,
       qtyToProduce: Number,
       
+      // 🟢 NEW: Item-specific Promise Date
+      promiseDate: Date,
+
       // Financial Fields
       unitPrice: { type: Number, default: 0 },
       itemTotal: { type: Number, default: 0 } 
@@ -23,6 +30,7 @@ const OrderSchema = new mongoose.Schema({
   // Order Total
   grandTotal: { type: Number, default: 0 },
 
+  // Global Delivery Date (Target)
   deliveryDate: Date,
   priority: { type: String, enum: ['Low', 'Medium', 'High'], default: 'Medium' },
   
@@ -32,16 +40,12 @@ const OrderSchema = new mongoose.Schema({
     default: 'Pending' 
   },
 
-  // 🟢 UPDATED: Added new logistics fields
   dispatchDetails: {
       vehicleNo: String,
       trackingId: String,
-      
-      // New Fields for Driver & Packaging
       driverName: String,
       driverPhone: String,
       packagingNote: String, 
-
       dispatchedAt: Date
   }
 }, { timestamps: true });

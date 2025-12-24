@@ -39,7 +39,9 @@ const ProductSchema = new mongoose.Schema({
 ProductSchema.pre("save", function (next) {
   // 1. Calculate Target Level (Stock At Least)
   // Formula: (Avg Daily Demand * Lead Time) + Safety Stock
-  this.stockAtLeast = (this.avgConsumption * this.leadTime) + this.safetyStock;
+  const baseDemand = this.avgConsumption * this.leadTime;
+const multiplier = this.safetyStock > 0 ? this.safetyStock : 1; 
+this.stockAtLeast = baseDemand * multiplier;
 
   // 2. Calculate Health % (Current vs Target)
   const target = this.stockAtLeast > 0 ? this.stockAtLeast : 1; // Prevent division by zero

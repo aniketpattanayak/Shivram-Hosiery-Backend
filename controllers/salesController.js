@@ -148,10 +148,8 @@ exports.createOrder = async (req, res) => {
         advanceReceived, advanceAmount 
     } = req.body;
     
-    // 🟢 CRITICAL FIX: Sanitize customerId
     let finalCustomerId = (customerId && mongoose.Types.ObjectId.isValid(customerId)) ? customerId : null;
 
-    // Hybrid Client Logic for Orders
     if (!finalCustomerId && customerName) {
          const existing = await Client.findOne({ name: { $regex: new RegExp(`^${customerName}$`, "i") } }).session(session);
          if (existing) {
@@ -176,48 +174,36 @@ exports.createOrder = async (req, res) => {
     for (const item of items) {
       const product = await Product.findOne({ name: item.productName }).session(session);
       
-      const currentWarehouse = product ? (product.stock?.warehouse || 0) : 0;
-      const currentReserved = product ? (product.stock?.reserved || 0) : 0;
-      const availableStock = currentWarehouse - currentReserved;
+      // 🟢 CHANGE: We no longer check availableStock or Reserve it.
+      // We assume FULL production is needed initially.
+      // Dispatching from stock later will reduce this demand.
       
-      let allocatedFromStock = 0;
-      let sendToProduction = 0;
+      const fullQty = Number(item.qtyOrdered); 
 
-      if (availableStock >= item.qtyOrdered) {
-        allocatedFromStock = item.qtyOrdered;
-      } else {
-        allocatedFromStock = Math.max(0, availableStock);
-        sendToProduction = item.qtyOrdered - allocatedFromStock;
-      }
-
-      if (product && allocatedFromStock > 0) {
-        if (!product.stock) product.stock = { warehouse: 0, reserved: 0 };
-        product.stock.reserved += allocatedFromStock;
-        await product.save({ session });
-      }
-
-      if (product && sendToProduction > 0) {
-        isProductionTriggered = true;
+      if (product) {
+        isProductionTriggered = true; // Always queue for production tracking
         const uniqueSuffix = Math.floor(1000 + Math.random() * 9000);
+        
         productionPlansToCreate.push({
           planId: `PP-${Date.now()}-${uniqueSuffix}`, 
           product: product._id, 
-          totalQtyToMake: sendToProduction,
+          totalQtyToMake: fullQty, // Ask for the full amount
+          dispatchedQty: 0,        // Start with 0 dispatched
           status: 'Pending Strategy', 
           splits: [] 
         });
       }
 
       const finalPrice = item.unitPrice !== undefined ? Number(item.unitPrice) : (product?.sellingPrice || 0);
-      const lineTotal = finalPrice * Number(item.qtyOrdered);
+      const lineTotal = finalPrice * fullQty;
       grandTotal += lineTotal;
 
       processedItems.push({
         product: product ? product._id : null,
         productName: item.productName,
-        qtyOrdered: item.qtyOrdered,
-        qtyAllocated: allocatedFromStock,
-        qtyToProduce: sendToProduction,
+        qtyOrdered: fullQty,
+        qtyAllocated: 0, // 🟢 Always 0 at start (No auto-reservation)
+        qtyToProduce: fullQty,
         unitPrice: finalPrice,
         itemTotal: lineTotal,
         promiseDate: item.promiseDate 
@@ -235,7 +221,7 @@ exports.createOrder = async (req, res) => {
       grandTotal: grandTotal, 
       deliveryDate: deliveryDate,
       priority: priority || 'Medium',
-      status: isProductionTriggered ? 'Production_Queued' : 'Ready_Dispatch',
+      status: 'Production_Queued', // Always Queued now
       advanceReceived: advanceReceived || false, 
       advanceAmount: advanceReceived ? (advanceAmount || 0) : 0
     });
@@ -251,7 +237,7 @@ exports.createOrder = async (req, res) => {
     }
 
     await session.commitTransaction();
-    res.status(201).json({ success: true, msg: 'Order processed', order: newOrder });
+    res.status(201).json({ success: true, msg: 'Order Created. Production Plan Generated (Full Qty).', order: newOrder });
 
   } catch (error) {
     await session.abortTransaction();

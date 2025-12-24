@@ -7,13 +7,23 @@ const ProductionPlanSchema = new mongoose.Schema({
   
   totalQtyToMake: { type: Number, required: true },
   
-  // 🟢 NEW: PROGRESS TRACKING
+  // 🟢 PROGRESS TRACKING
   plannedQty: { type: Number, default: 0 }, 
   linkedJobIds: [{ type: String }], // e.g. ["JC-IN-101", "JC-IN-102"]
 
+  // 🟢 TRACKING DISPATCH VS PRODUCTION
+  dispatchedQty: { type: Number, default: 0 },
+
   status: { 
     type: String, 
-    enum: ['Pending Strategy', 'Partially Planned', 'Scheduled', 'In Progress', 'Completed'], 
+    enum: [
+      'Pending Strategy', 
+      'Partially Planned', 
+      'Scheduled', 
+      'In Progress', 
+      'Completed', 
+      'Fulfilled_By_Stock'
+    ], 
     default: 'Pending Strategy' 
   },
 

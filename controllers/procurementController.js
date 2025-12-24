@@ -4,7 +4,7 @@ const Vendor = require('../models/Vendor');
 const PurchaseOrder = require('../models/PurchaseOrder'); 
 const JobCard = require('../models/JobCard');
 
-// @desc Process Purchase (Manual - Raw Material or Finished Good)
+// @desc Process Purchase (PO Generation - Standard)
 exports.createPurchase = async (req, res) => {
     try {
         const { vendor, itemId, itemType, qty, unitPrice } = req.body;
@@ -22,71 +22,153 @@ exports.createPurchase = async (req, res) => {
             if (fetchedItem) itemName = fetchedItem.name; 
         }
 
-        if (!fetchedItem) {
-            return res.status(404).json({ msg: 'Item not found' });
-        }
+        if (!fetchedItem) return res.status(404).json({ msg: 'Item not found' });
 
         const newPO = await PurchaseOrder.create({
             item_id: itemId,
             vendor_id: vendor,
-            itemName: itemName, // <--- This was working fine here
+            itemName: itemName, 
             itemType: itemType,
             orderedQty: Number(qty),
             receivedQty: 0,
             unitPrice: Number(unitPrice),
+            totalAmount: totalAmount,
             status: 'Pending'
         });
 
-        await Vendor.findByIdAndUpdate(vendor, { $inc: { balance: totalAmount } });
-
-        res.status(201).json({ 
-            success: true, 
-            msg: `Purchase Order Created Successfully.`, 
-            order: newPO 
-        });
+        res.status(201).json({ success: true, msg: `Purchase Order Created.`, order: newPO });
 
     } catch (error) {
-        console.error("Purchase Order Creation Error:", error); 
-        res.status(500).json({ msg: `Failed to create PO: ${error.message}` });
+        console.error("PO Error:", error); 
+        res.status(500).json({ msg: error.message });
     }
 };
 
-// @desc    Get Pending Trading Requests (Full-Buy Jobs)
-exports.getTradingRequests = async (req, res) => {
+// 🟢 NEW: Direct Stock Entry (Updates Stock & Creates Batch)
+exports.createDirectEntry = async (req, res) => {
+    const session = await require('mongoose').startSession();
+    session.startTransaction();
     try {
-        const requests = await JobCard.find({ 
-            type: 'Full-Buy', 
-            currentStep: 'Procurement_Pending' 
-        })
-        .populate('productId')
-        .sort({ createdAt: -1 });
-        
-        res.json(requests);
+        const { vendorId, items } = req.body; // items = [{ itemId, itemType, qty, rate, batch }]
+
+        const createdEntries = [];
+        let grandTotal = 0;
+
+        for (const item of items) {
+            const lineTotal = Number(item.qty) * Number(item.rate);
+            grandTotal += lineTotal;
+            let itemName = "Unknown";
+            
+            // 🟢 1. Handle Batch Number (User provided OR Auto-generated)
+            const finalBatchNumber = item.batch && item.batch.trim() !== "" 
+                ? item.batch 
+                : `DIR-${Date.now()}-${Math.floor(Math.random()*1000)}`;
+
+            const batchEntry = {
+                lotNumber: finalBatchNumber,
+                qty: Number(item.qty),
+                addedAt: new Date()
+            };
+
+            // 🟢 2. Update Inventory Stock & Push Batch
+            if (item.itemType === 'Raw Material') {
+                const mat = await Material.findById(item.itemId).session(session);
+                if (mat) {
+                    mat.stock.current += Number(item.qty); // Increase Total
+                    mat.costPerUnit = Number(item.rate); // Update Cost
+                    
+                    // Add to Batch History
+                    if (!mat.stock.batches) mat.stock.batches = [];
+                    mat.stock.batches.push(batchEntry);
+
+                    itemName = mat.name;
+                    await mat.save({ session });
+                }
+            } else if (item.itemType === 'Finished Good') {
+                const prod = await Product.findById(item.itemId).session(session);
+                if (prod) {
+                    prod.stock.warehouse += Number(item.qty); // Increase Total
+                    
+                    // Add to Batch History (Assuming Product model has stock.batches)
+                    // If your Product model structure is different, adjust this path.
+                    if (!prod.stock) prod.stock = { warehouse: 0, reserved: 0, batches: [] };
+                    if (!prod.stock.batches) prod.stock.batches = [];
+                    prod.stock.batches.push(batchEntry);
+
+                    itemName = prod.name;
+                    await prod.save({ session });
+                }
+            }
+
+            // 🟢 3. Create "Completed" Purchase Record
+            const entry = await PurchaseOrder.create([{
+                item_id: item.itemId,
+                vendor_id: vendorId,
+                itemName: itemName,
+                itemType: item.itemType,
+                orderedQty: Number(item.qty),
+                receivedQty: Number(item.qty),
+                unitPrice: Number(item.rate),
+                totalAmount: lineTotal,
+                isDirectEntry: true,
+                status: 'Completed',
+                // Optional: Save batch in PO record too if needed later
+                // batchNumber: finalBatchNumber 
+            }], { session });
+            
+            createdEntries.push(entry[0]);
+        }
+
+        // 4. Update Vendor Balance
+        if (vendorId) {
+            await Vendor.findByIdAndUpdate(vendorId, { $inc: { balance: grandTotal } }).session(session);
+        }
+
+        await session.commitTransaction();
+        res.status(201).json({ success: true, msg: "Stock Added & Batches Created!", entries: createdEntries });
+
+    } catch (error) {
+        await session.abortTransaction();
+        console.error("Direct Entry Error:", error);
+        res.status(500).json({ msg: error.message });
+    } finally {
+        session.endSession();
+    }
+};
+
+// 🟢 Get History
+exports.getDirectHistory = async (req, res) => {
+    try {
+        const history = await PurchaseOrder.find({ isDirectEntry: true })
+            .populate('vendor_id', 'name category')
+            .sort({ created_at: -1 });
+        res.json(history);
     } catch (error) {
         res.status(500).json({ msg: error.message });
     }
 };
 
-// @desc    Create Trading PO from Job Card (THE FIX IS HERE)
+// Trading Exports (Keep existing)
+exports.getTradingRequests = async (req, res) => {
+    try {
+        const requests = await JobCard.find({ type: 'Full-Buy', currentStep: 'Procurement_Pending' }).populate('productId').sort({ createdAt: -1 });
+        res.json(requests);
+    } catch (error) { res.status(500).json({ msg: error.message }); }
+};
+
 exports.createTradingPO = async (req, res) => {
     try {
         const { jobId, vendorId, costPerUnit } = req.body;
-        
-        // 1. Fetch Job and Populate Product to get the Name
         const job = await JobCard.findById(jobId).populate('productId');
         if (!job) return res.status(404).json({ msg: "Request not found" });
 
-        // 🟢 FIX: Ensure we have a valid name, fallback to 'Unknown' if missing
         const validItemName = job.productId ? job.productId.name : "Unknown Product";
 
         const po = await PurchaseOrder.create({
             po_id: `PO-TR-${Math.floor(1000 + Math.random() * 9000)}`,
             vendor_id: vendorId,
             item_id: job.productId._id, 
-            
-            // 🟢 CRITICAL FIX: Save the Name!
             itemName: validItemName, 
-            
             itemType: 'Finished Good',  
             orderedQty: job.totalQty,
             receivedQty: 0,
@@ -96,17 +178,14 @@ exports.createTradingPO = async (req, res) => {
             expectedDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) 
         });
 
-        // 2. Update Job Card Status
         job.currentStep = 'PO_Raised';
         job.status = 'In_Progress';
         job.history.push({ step: 'PO Created', status: 'PO_Raised', timestamp: new Date() });
         await job.save();
 
-        // 3. Update Vendor Balance
         await Vendor.findByIdAndUpdate(vendorId, { $inc: { balance: (job.totalQty * costPerUnit) } });
 
         res.json({ success: true, msg: "Purchase Order Created!", po });
-
     } catch (error) {
         console.error(error);
         res.status(500).json({ msg: error.message });

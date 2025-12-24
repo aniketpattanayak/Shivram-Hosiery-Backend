@@ -3,22 +3,28 @@ const mongoose = require('mongoose');
 const PurchaseOrderSchema = new mongoose.Schema({
   item_id: { 
     type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Product', // Link to your Product/Stock collection
-    required: true 
+    required: true,
+    refPath: 'itemTypeModel' // Dynamic reference based on itemType
   },
   vendor_id: { 
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'Vendor', 
     required: true 
   },
-  itemName: String, // Optional, for easier display
+  itemName: String, 
   itemType: {
     type: String,
     enum: ['Raw Material', 'Finished Good'],
     required: true
   },
+  
+  // 🟢 NEW: Financials & Flags
   orderedQty: { type: Number, required: true },
-  receivedQty: { type: Number, default: 0 }, // Starts at 0
+  receivedQty: { type: Number, default: 0 }, 
+  unitPrice: { type: Number, default: 0 },     // Added
+  totalAmount: { type: Number, default: 0 },   // Added
+  isDirectEntry: { type: Boolean, default: false }, // To distinguish PO vs Direct
+
   status: { 
     type: String, 
     enum: ['Pending', 'Partial', 'Completed'], 

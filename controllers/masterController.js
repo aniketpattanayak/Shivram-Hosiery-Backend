@@ -21,14 +21,20 @@ exports.addCategory = async (req, res) => {
   }
 };
 
-exports.addSubCategory = async (req, res) => {
+// 🟢 NEW: Handles the PUT request from Frontend for Sub-Categories
+exports.updateCategory = async (req, res) => {
   try {
-    const { categoryId, subCategory } = req.body;
-    const cat = await Category.findById(categoryId);
-    if (!cat.subCategories.includes(subCategory)) {
-      cat.subCategories.push(subCategory);
-      await cat.save();
+    const { id } = req.params;
+    const { subCategories } = req.body; // Expecting the updated array
+
+    const cat = await Category.findById(id);
+    if (!cat) return res.status(404).json({ msg: "Category not found" });
+
+    if (subCategories) {
+      cat.subCategories = subCategories;
     }
+    
+    await cat.save();
     res.json(cat);
   } catch (err) {
     res.status(500).json({ msg: err.message });
@@ -39,13 +45,9 @@ exports.addSubCategory = async (req, res) => {
 exports.getAttributes = async (req, res) => {
   try {
     const attrs = await Attribute.find();
-
-    // 🟢 UPDATE: Made this dynamic.
-    // It now handles 'materialType', 'unit', 'color', 'fabric' automatically.
     const grouped = {};
 
     attrs.forEach((a) => {
-      // If the list for this type doesn't exist yet, create it
       if (!grouped[a.type]) {
         grouped[a.type] = [];
       }
@@ -64,7 +66,6 @@ exports.addAttribute = async (req, res) => {
     const newAttr = await Attribute.create({ type, value });
     res.json(newAttr);
   } catch (err) {
-    // 🟢 Changed to 400 to help Frontend detect duplicates
     res.status(400).json({ msg: err.message });
   }
 };

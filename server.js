@@ -48,7 +48,7 @@ app.use('/api/procurement', helperRoutes); // Serves /api/procurement/vendors
 
 // Commercial Routes
 app.use('/api/products', require('./routes/productRoutes'));
-app.use('/api/sales', require('./routes/salesRoutes'));
+app.use('/api/sales', require('./routes/salesRoutes')); // 🟢 Handles /quotes, /orders, /clients, /leads
 app.use('/api/procurement', require('./routes/procurementRoutes'));
 app.use('/api/vendors', require('./routes/vendorRoutes'));
 
@@ -64,7 +64,10 @@ app.use('/api/quality', require('./routes/qualityRoutes'));
 app.use('/api/finance', require('./routes/financeRoutes'));
 app.use('/api/reports', require('./routes/reportRoutes'));
 app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/sales/quotes', require('./routes/quotationRoutes'));
+
+// 🔴 REMOVED: quotationRoutes (Merged into salesRoutes)
+// app.use('/api/sales/quotes', require('./routes/quotationRoutes')); <--- This was causing the crash
+
 app.use('/api/sales/expenses', require('./routes/expenseRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/master', require('./routes/masterRoutes'));

@@ -1,13 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const dispatchController = require('../controllers/dispatchController'); // Ensure this path is correct
+const dispatchController = require('../controllers/dispatchController');
+const { protect } = require('../middleware/auth');
 
-// @route   POST /api/logistics/dispatch
-// @desc    Ship an order (Updates status & transport details)
-router.post('/dispatch', dispatchController.shipOrder);
+// 🟢 GET Routes for the Tabs
+router.get('/pending', protect, dispatchController.getDispatchOrders);
+router.get('/history', protect, dispatchController.getDispatchHistory);
 
-// @route   GET /api/logistics/orders
-// @desc    Get orders ready for dispatch (Optional, if you use it)
-// router.get('/orders', dispatchController.getDispatchOrders); 
+// 🔵 POST Route for Dispatching
+router.post('/dispatch', protect, dispatchController.shipOrder);
 
 module.exports = router;

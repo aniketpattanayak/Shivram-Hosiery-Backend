@@ -8,11 +8,24 @@ exports.getDispatchOrders = async (req, res) => {
   try {
     const orders = await Order.find({ status: { $ne: 'Dispatched' } })
       .populate('items.product')
-      .populate({ path: 'clientId', strictPopulate: false }); 
+      // 🟢 ONLY ADD THIS LINE: It pulls the address from the Client Master
+      .populate({ path: 'clientId', select: 'address' }); 
       
     res.json(orders);
   } catch (error) {
-    console.error("Dispatch Error:", error); 
+    res.status(500).json({ msg: error.message });
+  }
+};
+exports.getDispatchHistory = async (req, res) => {
+  try {
+    const history = await Order.find({ status: 'Dispatched' })
+      .populate('items.product')
+      // 🟢 FETCH ADDRESS FOR THE HISTORY TAB TOO
+      .populate({ path: 'clientId', select: 'address' })
+      .sort({ 'dispatchDetails.dispatchedAt': -1 });
+      
+    res.json(history);
+  } catch (error) {
     res.status(500).json({ msg: error.message });
   }
 };

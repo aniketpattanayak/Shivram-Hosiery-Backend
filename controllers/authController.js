@@ -11,7 +11,8 @@ const generateToken = (id) => {
 // @route   POST /api/auth/register
 exports.registerUser = async (req, res) => {
     try {
-      const { name, email, password, role, permissions } = req.body;
+      // 🟢 UPDATED: Added vendorId to destructuring
+      const { name, email, password, role, permissions, vendorId } = req.body;
       
       const userExists = await User.findOne({ email });
       if (userExists) return res.status(400).json({ msg: 'User already exists' });
@@ -24,7 +25,8 @@ exports.registerUser = async (req, res) => {
         email, 
         password, 
         role,
-        permissions: userPermissions 
+        permissions: userPermissions,
+        vendorId: vendorId || null // 🟢 UPDATED: Save the link if provided
       });
   
       if (user) {
@@ -35,7 +37,8 @@ exports.registerUser = async (req, res) => {
               name: user.name,
               email: user.email,
               role: user.role,
-              permissions: user.permissions
+              permissions: user.permissions,
+              vendorId: user.vendorId // 🟢 UPDATED: Include in response
           }
         });
       }
@@ -53,7 +56,7 @@ exports.loginUser = async (req, res) => {
   
       if (user && (await user.matchPassword(password))) {
         // 🟢 FIX: Structure response as { token, user: {} }
-        // This matches the frontend check: res.data.user
+        // 🟢 UPDATED: Added vendorId to the user object
         res.json({
           token: generateToken(user._id),
           user: {
@@ -61,7 +64,8 @@ exports.loginUser = async (req, res) => {
             name: user.name,
             email: user.email,
             role: user.role,
-            permissions: user.permissions || [] 
+            permissions: user.permissions || [],
+            vendorId: user.vendorId || null // 🟢 BRIDGE: Critical for Vendor Dashboard
           }
         });
       } else {
@@ -76,7 +80,11 @@ exports.loginUser = async (req, res) => {
 // @route   GET /api/auth/users
 exports.getAllUsers = async (req, res) => {
   try {
-    const users = await User.find().select('-password').sort({ createdAt: -1 });
+    // 🟢 UPDATED: Added .populate('vendorId') so you can see vendor names in User Settings
+    const users = await User.find()
+      .select('-password')
+      .populate('vendorId', 'name')
+      .sort({ createdAt: -1 });
     res.json(users);
   } catch (error) {
     res.status(500).json({ msg: error.message });
@@ -98,7 +106,7 @@ exports.deleteUser = async (req, res) => {
 // @route   PUT /api/auth/users/:id
 exports.updateUser = async (req, res) => {
   try {
-    const { name, email, role, permissions, password } = req.body;
+    const { name, email, role, permissions, password, vendorId } = req.body;
     
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ msg: "User not found" });
@@ -108,6 +116,7 @@ exports.updateUser = async (req, res) => {
     user.email = email || user.email;
     user.role = role || user.role;
     user.permissions = permissions || user.permissions;
+    user.vendorId = vendorId !== undefined ? vendorId : user.vendorId; // 🟢 UPDATED: Allow changing vendor link
 
     // Only update password if a new one is provided
     if (password && password.trim() !== "") {
@@ -133,7 +142,10 @@ exports.getMe = async (req, res) => {
     // req.user comes from middleware
     const userId = req.user._id || req.user.id; 
     
-    const user = await User.findById(userId).select('-password');
+    // 🟢 UPDATED: Added .populate('vendorId') so the frontend state always knows the vendor
+    const user = await User.findById(userId)
+      .select('-password')
+      .populate('vendorId', 'name');
     
     if (!user) {
         return res.status(401).json({ msg: 'User no longer exists' });

@@ -37,6 +37,11 @@ const JobCardSchema = new mongoose.Schema({
       'Material_Pending',     // Kitting Stage
       'Cutting_Pending',      // Next Stage
       'Cutting_Started', 
+      'Cutting_Completed',
+      'Stitching_Pending',   // 🟢 ADD THIS
+      'Stitching_Started',   // 🟢 ADD THIS
+      'Stitching_Completed', // 🟢 ADD THIS
+      'Packaging_Pending',   // 🟢 ADD THIS
       'Sewing_Started', 
       'Packaging_Started',
       'QC_Pending', 
@@ -57,10 +62,26 @@ const JobCardSchema = new mongoose.Schema({
     requiredQty: Number 
   }],
 
+  // 🟢 NEW: Accountability Data Slot
+  productionData: {
+    vendorDispatch: {
+      isReady: { type: Boolean, default: false },
+      actualQtyProduced: { type: Number, default: 0 },
+      wastageQty: { type: Number, default: 0 }, 
+      dispatchDate: { type: Date }
+    },
+    adminReceipt: {
+      isReceived: { type: Boolean, default: false },
+      finalQtyReceived: { type: Number, default: 0 },
+      receivedAt: { type: Date }
+    }
+  },
+
   issuedMaterials: [{ 
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' },
     materialName: String,
     qtyIssued: Number,
+    lotNumber: String,
     issuedTo: String,   
     issuedBy: String,   
     role: String,     

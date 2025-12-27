@@ -198,25 +198,35 @@ exports.confirmStrategy = async (req, res) => {
 };
 
 // @desc    Get Active Jobs (Shop Floor)
+// backend/controllers/productionController.js
+
 exports.getActiveJobs = async (req, res) => {
   try {
     const jobs = await JobCard.find({ 
         currentStep: { 
             $in: [
                 'Cutting_Pending', 'Cutting_Started', 'Cutting_Completed',
-                'Sewing_Pending', 'Sewing_Started', 'Sewing_Completed',
-                'Packaging_Started', 'QC_Pending', 'QC_Review_Needed', 
-                'QC_Completed'
+                'Stitching_Pending', 'Stitching_Started', 'Stitching_Completed',
+                'Packaging_Pending', 'Packaging_Started', 'QC_Pending', 
+                'QC_Review_Needed', 'QC_Completed'
             ] 
         } 
     })
-      .populate('productId') 
-      .populate({ path: 'planId', populate: { path: 'product' } }) 
-      .populate('batchPlans') 
-      .sort({ createdAt: -1 });
-    res.json(jobs);
+      .populate('productId', 'name sku color') // 🟢 Only fetch needed fields
+      .populate({ 
+          path: 'planId', 
+          select: 'totalQtyToMake status', // 🟢 Safely select fields
+          populate: { path: 'product', select: 'name' } 
+      }) 
+      .sort({ updatedAt: -1 });
+
+    // 🟢 Filter out any jobs that might have broken data links to prevent frontend crashes
+    const validJobs = jobs.filter(job => job.productId !== null);
+
+    res.json(validJobs);
   } catch (error) {
-    res.status(500).json({ msg: error.message });
+    console.error("Production Floor Error:", error); // 🟢 This will show the exact error in your terminal
+    res.status(500).json({ msg: "Error loading production floor data" });
   }
 };
 
@@ -234,6 +244,94 @@ exports.getKittingJobs = async (req, res) => {
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
+};
+
+// ... [Keep existing imports] ...
+
+// 🟢 NEW: Get all vendors for selection in Strategy Modal
+exports.getAllVendors = async (req, res) => {
+  try {
+    const vendors = await Vendor.find({}, 'name category services email');
+    res.json(vendors);
+  } catch (error) {
+    res.status(500).json({ msg: error.message });
+  }
+};
+
+// @desc    Confirm Strategy (Updated to capture Vendor & Routing)
+exports.confirmStrategy = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { planId, splits } = req.body; 
+    const plan = await ProductionPlan.findById(planId).populate('product').session(session);
+    if (!plan) throw new Error('Production Plan not found');
+
+    const createdJobs = [];
+    const newJobIds = []; 
+
+    for (const split of splits) {
+      if (split.qty <= 0) continue;
+
+      const mode = split.mode || split.type; 
+      let finalVendorId = null;
+      let finalCost = Number(split.unitCost || split.cost) || 0;
+
+      // 🟢 Logic: Find Vendor ID from the Routing object
+      if (mode === 'Manufacturing') {
+        // If Cutting is Job Work, use that vendor. Otherwise, if Stitching is Job Work, use that.
+        const routing = split.routing;
+        let targetVendorName = "";
+
+        if (routing.cutting.type === 'Job Work') targetVendorName = routing.cutting.vendorName;
+        else if (routing.stitching.type === 'Job Work') targetVendorName = routing.stitching.vendorName;
+
+        if (targetVendorName) {
+          const vendorDoc = await Vendor.findOne({ name: targetVendorName }).session(session);
+          finalVendorId = vendorDoc ? vendorDoc._id : null;
+        }
+      } else if (mode === 'Full-Buy') {
+        finalVendorId = split.trading?.vendorId || null;
+        finalCost = Number(split.trading?.cost) || 0;
+      }
+
+      const suffix = Math.floor(1000 + Math.random() * 9000);
+      let prefix = mode === 'Full-Buy' ? 'TR-REQ' : 'JC-IN'; 
+      if (mode === 'Manufacturing' && split.routing?.cutting?.type === 'Job Work') prefix = 'JC-JW';
+
+      const jobId = `${prefix}-${suffix}`;
+      
+      const newJobData = {
+        jobId,
+        planId: plan._id, 
+        productId: plan.product._id, 
+        totalQty: split.qty, 
+        type: mode === 'Full-Buy' ? 'Full-Buy' : 'In-House',
+        vendorId: finalVendorId, // 🔗 Links to Rakesh's Portal
+        unitCost: finalCost,        
+        status: 'Pending',
+        currentStep: mode === 'Full-Buy' ? 'Procurement_Pending' : 'Material_Pending', 
+        routing: split.routing || null,
+        timeline: [{ stage: 'Created', action: 'Plan Strategy Confirmed', timestamp: new Date() }]
+      };
+
+      const job = await JobCard.create([newJobData], { session });
+      createdJobs.push(job[0]);
+      newJobIds.push(jobId);
+    }
+
+    // ... [Keep existing Plan update logic] ...
+    plan.plannedQty += splits.reduce((sum, s) => sum + (Number(s.qty) || 0), 0);
+    plan.status = 'Scheduled';
+    await plan.save({ session });
+
+    await session.commitTransaction();
+    res.json({ success: true, jobs: createdJobs });
+  } catch (error) {
+    await session.abortTransaction();
+    res.status(500).json({ msg: error.message });
+  } finally { session.endSession(); }
 };
 
 // @desc    Issue Materials with LOT MANAGEMENT

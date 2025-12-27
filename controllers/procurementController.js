@@ -191,3 +191,25 @@ exports.createTradingPO = async (req, res) => {
         res.status(500).json({ msg: error.message });
     }
 };
+
+// backend/controllers/procurementController.js
+
+// ... keep all your existing code (createPurchase, createDirectEntry, etc.) ...
+
+// 🟢 ADD THIS AT THE BOTTOM
+// @desc    Get all vendors for selection in Production Strategy
+// @route   GET /api/procurement/vendors
+// @desc    Get all vendors for selection in Production Strategy
+// @route   GET /api/procurement/vendors
+// backend/controllers/procurementController.js
+
+exports.getAllVendors = async (req, res) => {
+    try {
+        // 🟢 FIX: You must include 'category' in the second argument string
+        const vendors = await Vendor.find({}, 'name category services'); 
+        res.json(vendors);
+    } catch (error) {
+        console.error("Fetch Vendors Error:", error);
+        res.status(500).json({ msg: error.message });
+    }
+};

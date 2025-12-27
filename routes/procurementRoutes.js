@@ -2,24 +2,31 @@ const express = require('express');
 const router = express.Router();
 const procurementController = require('../controllers/procurementController');
 const purchaseController = require('../controllers/purchaseController'); 
+const { protect, admin } = require('../middleware/auth');
 
-// Standard PO
+// --- Standard Purchase & Direct Entry ---
 router.post('/purchase', procurementController.createPurchase);
 router.post('/direct-entry', procurementController.createDirectEntry);
 router.get('/direct-entry', procurementController.getDirectHistory);
 
-// Receipt Logic
-router.get('/open-orders', purchaseController.getOpenOrders); 
+// 🟢 NEW: Route to fetch vendors for the Production Split Strategy Modal
+// This connects the frontend StrategyModal to the backend list of vendors
+router.get('/vendors', procurementController.getAllVendors); 
 
-// 🟢 NEW: Add this line here to connect the Admin Page!
+// --- Receipt & QC Logic ---
+router.get('/open-orders', purchaseController.getOpenOrders); 
+router.post('/purchase', protect, procurementController.createPurchase);
+// NEW: Add this line here to connect the Admin Page!
 router.get('/qc-review-list', purchaseController.getQCReviewList); 
 
 router.get('/received-history', purchaseController.getCompletedHistory);
 router.put('/receive/:id', purchaseController.receiveOrder); 
 
-// Trading Logic
+// --- Trading Logic ---
 router.get('/trading', procurementController.getTradingRequests);
 router.post('/create-trading-po', procurementController.createTradingPO);
-// 🟢 NEW: Add this line to fix the 404 on button click
+
+// NEW: Add this line to fix the 404 on button click
 router.post('/qc-decision', purchaseController.processQCDecision);
+
 module.exports = router;

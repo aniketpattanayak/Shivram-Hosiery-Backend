@@ -73,6 +73,8 @@ app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/master', require('./routes/masterRoutes'));
 app.use('/api/roles', require('./routes/roleRoutes'));
 app.use('/api/logistics', require('./routes/logisticsRoutes'));
+app.use('/api/helpers', helperRoutes);
+
 
 // Socket Events
 io.on('connection', (socket) => {

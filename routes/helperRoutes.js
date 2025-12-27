@@ -16,13 +16,20 @@ router.get('/materials', async (req, res) => {
 
 // @route   GET /api/procurement/vendors
 // @desc    Get simple list of vendors for dropdowns
+// backend/routes/helperRoute.js
+
+// backend/routes/helperRoute.js
+
+// @route   GET /api/procurement/vendors
 router.get('/vendors', async (req, res) => {
     try {
-        const vendors = await Vendor.find().select('name type');
+        // 🟢 FIX: Select 'category' to match your "Add New Vendor" modal
+        const vendors = await Vendor.find().select('name category services');
         res.json(vendors);
     } catch (err) {
         res.status(500).json({ msg: err.message });
     }
 });
+
 
 module.exports = router;

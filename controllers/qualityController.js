@@ -21,6 +21,7 @@ exports.getPendingQC = async (req, res) => {
 
 // @desc    Submit QC Result (The Gatekeeper Logic)
 // @route   POST /api/quality/submit
+
 exports.submitQC = async (req, res) => {
   try {
     const { jobId, sampleSize, qtyRejected, notes } = req.body;
@@ -40,109 +41,112 @@ exports.submitQC = async (req, res) => {
     const totalBatchQty = job.totalQty || job.targetQuantity || 0; 
     const sample = Number(sampleSize) || 0;
     const rejected = Number(qtyRejected) || 0;
-
-    if (rejected > sample) {
-        return res.status(400).json({ msg: `Error: Rejected (${rejected}) cannot exceed Sample Size (${sample}).` });
-    }
-
-    // ====================================================
-    // 🟢 THE GATEKEEPER LOGIC (20% RULE)
-    // ====================================================
-
-    // A. Calculate Rejection Rate
-    const defectRate = sample > 0 ? ((rejected / sample) * 100) : 0;
-    const defectRateDisplay = defectRate.toFixed(2);
-
-    // B. Determine Fate based on 20% Threshold
-    const isHighFailure = defectRate >= 20;
-
-    // C. Calculate Good Stock (Option A: Subtract rejected from total)
-    // Formula: We assume the rejection rate applies to the whole batch OR just subtract specific rejects
-    // Your Request: Option A (Total - Rejected Samples)
     const passedQty = totalBatchQty - rejected; 
 
+    const defectRate = sample > 0 ? ((rejected / sample) * 100) : 0;
+    const defectRateDisplay = defectRate.toFixed(2);
+    const isHighFailure = defectRate >= 20;
+
     if (isHighFailure) {
-        // 🔴 STOP! QC HOLD
-        job.status = 'QC_HOLD'; // New Status
+        job.status = 'QC_HOLD'; 
         job.currentStep = 'QC_Review_Needed';
-        
         job.qcResult = {
-            totalBatchQty,
-            sampleSize: sample,
-            passedQty: 0, // Nothing passed yet
-            rejectedQty: rejected,
-            defectRate: `${defectRateDisplay}%`,
-            inspectorName,
-            status: 'Held',
-            notes: notes || 'High Failure Rate (>20%). Pending Admin Review.',
-            date: new Date()
+            totalBatchQty, sampleSize: sample, passedQty: 0, rejectedQty: rejected,
+            defectRate: `${defectRateDisplay}%`, inspectorName, status: 'Held',
+            notes: notes || 'High Failure Rate (>20%). Pending Admin Review.', date: new Date()
         };
-
         await job.save();
-
-        return res.json({ 
-            success: true, 
-            status: 'HELD',
-            msg: `⚠️ QC HOLD ACTIVATED! Defect Rate is ${defectRateDisplay}%. Batch is held for Admin Review. Stock NOT added.` 
-        });
+        return res.json({ success: true, status: 'HELD', msg: `⚠️ QC HOLD! Defect Rate is ${defectRateDisplay}%.` });
 
     } else {
-        // 🟢 SAFE. AUTO-APPROVE
+        // ====================================================
+        // 🟢 THE SMART GATE DETECTOR (Breaks the Loop)
+        // ====================================================
         
-        // 1. Update Inventory
-        if (passedQty > 0) {
-            product.stock.warehouse += Number(passedQty);
-            if (!product.stock.batches) product.stock.batches = [];
-            product.stock.batches.push({
-                lotNumber: `FG-${job.jobId}`, 
-                qty: Number(passedQty),
-                date: new Date(),
-                inspector: inspectorName
+        // We look into the Product's SFG stock to see if this specific Job already created a lot.
+        // If it exists, it means Gate 1 (Stitching) is ALREADY DONE.
+        const existingSFGLot = product.stock.semiFinished?.find(lot => lot.jobId === job.jobId);
+        
+        // Also check if the job history already contains an "Assembly QC" entry
+        const hasPassedAssembly = job.history?.some(h => h.step === 'Assembly QC');
+
+        if (!existingSFGLot && !hasPassedAssembly) {
+            // --- PATH A: ASSEMBLY QC (GATE 1) ---
+            const sfgLotId = `SFG-${job.jobId.split('-').pop()}`;
+            
+            if (!product.stock.semiFinished) product.stock.semiFinished = [];
+            product.stock.semiFinished.push({
+              lotNumber: sfgLotId,
+              qty: Number(passedQty),
+              date: new Date(),
+              jobId: job.jobId
             });
-            await product.save();
+
+            job.currentStep = 'Packaging_Pending'; 
+            job.status = 'Ready_For_Packing'; 
+
+            job.qcResult = {
+                totalBatchQty, sampleSize: sample, passedQty, rejectedQty: rejected,
+                defectRate: `${defectRateDisplay}%`, inspectorName, status: 'Verified_SFG',
+                notes: notes || 'Stitching Passed. Moved to SFG Storage.', date: new Date()
+            };
+
+            if (!job.history) job.history = [];
+            job.history.push({ 
+                step: 'Assembly QC', 
+                status: `SFG Verified (Lot: ${sfgLotId})`,
+                details: `Passed Assembly Gate. Sent to Packaging.`,
+                timestamp: new Date() 
+            });
+
+        } else {
+            // --- PATH B: FINAL QC (GATE 2) ---
+            if (passedQty > 0) {
+                product.stock.warehouse += Number(passedQty);
+                if (!product.stock.batches) product.stock.batches = [];
+                product.stock.batches.push({
+                    lotNumber: `FG-${job.jobId.split('-').pop()}`, 
+                    qty: Number(passedQty),
+                    date: new Date(),
+                    inspector: inspectorName
+                });
+            }
+
+            // 🛑 CRITICAL: Remove the SFG lot now that it's turned into Finished Goods
+            product.stock.semiFinished = product.stock.semiFinished.filter(lot => lot.jobId !== job.jobId);
+
+            job.status = 'Completed';
+            job.currentStep = 'QC_Completed';
+
+            job.qcResult = {
+                totalBatchQty, sampleSize: sample, passedQty, rejectedQty: rejected,
+                defectRate: `${defectRateDisplay}%`, inspectorName, status: 'Verified',
+                notes: notes || 'Final QC Passed.', date: new Date()
+            };
+
+            if (!job.history) job.history = [];
+            job.history.push({ 
+                step: 'Final Quality Control', 
+                status: `Verified (Final)`,
+                details: `Finished Goods moved to Warehouse.`,
+                timestamp: new Date() 
+            });
         }
 
-        // 2. Update Job
-        job.status = 'Completed';
-        job.currentStep = 'QC_Completed';
-        
-        job.qcResult = {
-            totalBatchQty,
-            sampleSize: sample,
-            passedQty,
-            rejectedQty: rejected,
-            defectRate: `${defectRateDisplay}%`,
-            inspectorName,
-            status: 'Verified',
-            notes: notes || '',
-            date: new Date()
-        };
-        
-        // Add to History
-        if (!job.history) job.history = [];
-        job.history.push({ 
-            step: 'Quality Control', 
-            status: `Verified (Rate: ${defectRateDisplay}%)`,
-            details: `Inspected by ${inspectorName}. Added ${passedQty} to Stock.`,
-            timestamp: new Date() 
-        });
-
+        await product.save();
         await job.save();
 
         return res.json({ 
             success: true, 
             status: 'VERIFIED',
-            msg: `✅ QC Passed! Rate: ${defectRateDisplay}%. ${passedQty} units added to Inventory.` 
+            msg: `✅ QC Passed! Next Step: ${job.currentStep.replace('_', ' ')}` 
         });
     }
-
   } catch (error) {
     console.error("QC Error:", error);
     res.status(500).json({ msg: error.message });
   }
 };
-
-// ... existing imports ...
 
 // @desc    Get All Jobs on QC HOLD (Admin View)
 // @route   GET /api/quality/held
@@ -150,7 +154,7 @@ exports.getHeldQC = async (req, res) => {
   try {
     const jobs = await JobCard.find({ status: 'QC_HOLD' })
       .populate('productId', 'name sku')
-      .sort({ updatedAt: -1 }); // Newest holds first
+      .sort({ updatedAt: -1 }); 
     res.json(jobs);
   } catch (error) {
     res.status(500).json({ msg: error.message });
@@ -161,7 +165,7 @@ exports.getHeldQC = async (req, res) => {
 // @route   POST /api/quality/review
 exports.reviewQC = async (req, res) => {
   try {
-    const { jobId, decision, adminNotes } = req.body; // decision = 'approve' or 'reject'
+    const { jobId, decision, adminNotes } = req.body; 
 
     const job = await JobCard.findOne({ jobId });
     if (!job) return res.status(404).json({ msg: 'Job not found' });
@@ -172,49 +176,56 @@ exports.reviewQC = async (req, res) => {
     const adminName = req.user ? req.user.name : "Admin";
 
     if (decision === 'approve') {
-        // 🟢 OPTION 1: FORCE APPROVE
-        // We perform the stock addition NOW because it was skipped earlier.
+        const passedQty = job.qcResult.passedQty || (job.totalQty - job.qcResult.rejectedQty);
         
-        // Recalculate Passed Qty (Total - Rejected)
-        // We rely on the data saved in qcResult during the hold
-        const passedQty = job.qcResult.passedQty || (job.targetQuantity - job.qcResult.rejectedQty);
+        // Determine if we are overriding an SFG check or a Final FG check based on step
+        const isAssemblyOverride = job.currentStep === 'QC_Review_Needed' && job.qcResult.status === 'Held' && !job.productionData?.sfgSource?.lotNumber;
         
         if (passedQty > 0) {
-            product.stock.warehouse += Number(passedQty);
-            
-            if (!product.stock.batches) product.stock.batches = [];
-            product.stock.batches.push({
-                lotNumber: `FG-${job.jobId}-FORCE`, 
-                qty: Number(passedQty),
-                date: new Date(),
-                inspector: `${adminName} (Admin Override)`
-            });
+            if (isAssemblyOverride) {
+                // To SFG
+                const sfgLot = `SFG-${job.jobId.split('-').pop()}-FORCE`;
+                product.stock.semiFinished.push({
+                    lotNumber: sfgLot,
+                    qty: Number(passedQty),
+                    date: new Date(),
+                    jobId: job.jobId
+                });
+                job.currentStep = 'Packaging_Pending';
+                job.status = 'Ready_For_Packing';
+            } else {
+                // To Warehouse
+                product.stock.warehouse += Number(passedQty);
+                product.stock.batches.push({
+                    lotNumber: `FG-${job.jobId.split('-').pop()}-FORCE`, 
+                    qty: Number(passedQty),
+                    date: new Date(),
+                    inspector: `${adminName} (Admin Override)`
+                });
+                job.status = 'Completed';
+                job.currentStep = 'QC_Completed';
+            }
             await product.save();
         }
 
-        job.status = 'Completed';
-        job.currentStep = 'QC_Completed';
         job.history.push({
             step: 'QC Review',
             status: 'Force Approved',
-            details: `Admin ${adminName} overrode QC Hold. Added ${passedQty} units to stock. Note: ${adminNotes}`,
+            details: `Admin ${adminName} overrode QC Hold. Note: ${adminNotes}`,
             timestamp: new Date()
         });
 
         await job.save();
-        return res.json({ success: true, msg: `✅ Batch Force Approved. ${passedQty} units added to inventory.` });
+        return res.json({ success: true, msg: `✅ Batch Force Approved.` });
 
     } else if (decision === 'reject') {
-        // 🔴 OPTION 2: PERMANENT REJECT
-        // No stock is added. The batch is marked as dead.
-        
         job.status = 'QC_Rejected';
         job.currentStep = 'Scrapped';
         
         job.history.push({
             step: 'QC Review',
             status: 'Rejected',
-            details: `Admin ${adminName} rejected the held batch. 0 units added. Note: ${adminNotes}`,
+            details: `Admin ${adminName} rejected the held batch. Note: ${adminNotes}`,
             timestamp: new Date()
         });
 

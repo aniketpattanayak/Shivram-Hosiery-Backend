@@ -1,18 +1,13 @@
 const JobCard = require("../models/JobCard");
 const Material = require("../models/Material");
 const Product = require("../models/Product");
+const Vendor = require("../models/Vendor");
 
 // @desc    Get Active Job Cards (Shop Floor)
-// @route   GET /api/shopfloor
-// @desc    Get Job Cards (Filtered by Vendor if applicable)
-// @route   GET /api/shopfloor
-// backend/controllers/jobCardController.js
-
 exports.getJobCards = async (req, res) => {
   try {
     let query = {};
     
-    // 🟢 SAFE CHECK: Ensure req.user exists before accessing role
     if (!req.user) {
         return res.status(401).json({ msg: "Not authorized, no user data" });
     }
@@ -25,7 +20,7 @@ exports.getJobCards = async (req, res) => {
     }
 
     const jobs = await JobCard.find(query)
-      .populate("productId", "name sku color")
+      .populate("productId", "name sku color stockAtLeast stock") // Added stock fields for SFG visibility
       .populate("vendorId", "name")
       .sort({ createdAt: -1 });
 
@@ -37,10 +32,8 @@ exports.getJobCards = async (req, res) => {
 };
 
 // @desc    Get Job Cards for the Logged-in Vendor
-// @route   GET /api/vendors/my-jobs
 exports.getVendorJobs = async (req, res) => {
   try {
-    // If Admin, show everything. If Vendor, filter by their vendorId from their user profile.
     const query = req.user.role === "Admin" ? {} : { vendorId: req.user.vendorId };
 
     const jobs = await JobCard.find(query)
@@ -54,8 +47,7 @@ exports.getVendorJobs = async (req, res) => {
   }
 };
 
-// @desc    Get Jobs Ready for QC
-// @route   GET /api/shopfloor/qc
+// @desc    Get Jobs Ready for QC (Covers both Assembly and Final QC)
 exports.getQCJobs = async (req, res) => {
   try {
     const jobs = await JobCard.find({ currentStep: "QC_Pending" })
@@ -68,15 +60,10 @@ exports.getQCJobs = async (req, res) => {
   }
 };
 
-// ---------------------------------------------------------
-// 🛠️ FIXED TRANSACTIONAL ISSUE MATERIAL FUNCTION
-// ---------------------------------------------------------
-// @route   POST /api/shopfloor/issue
+// @desc    Issue Raw Material
 exports.issueMaterial = async (req, res) => {
   try {
     const { jobId } = req.body;
-    
-    // 1. Find Job and Populate Product BOM
     const job = await JobCard.findOne({ jobId }).populate('productId');
     if (!job) return res.status(404).json({ msg: 'Job Card not found' });
     
@@ -84,16 +71,13 @@ exports.issueMaterial = async (req, res) => {
         return res.status(400).json({ msg: 'Material already issued or invalid state' });
     }
 
-    // 2. Identification: Who is the Vendor for the first stage (Cutting)?
     const routingName = job.routing?.cutting?.vendorName || "Internal";
     const assignedVendor = await Vendor.findOne({ name: routingName });
     
-    // 🔗 Auto-link the vendorId to the Job Card if found
     if (assignedVendor) {
       job.vendorId = assignedVendor._id;
     }
 
-    // 3. Execution & FIFO Lot Picking (Simplified for clarity)
     let pickingList = [];
     const product = job.productId;
 
@@ -102,8 +86,6 @@ exports.issueMaterial = async (req, res) => {
         if (!material) continue;
 
         const requiredQty = item.qtyRequired * job.totalQty;
-        
-        // FIFO Logic: Deduct from oldest batches first
         if (!material.stock.batches) material.stock.batches = [];
         material.stock.batches.sort((a, b) => new Date(a.addedAt) - new Date(b.addedAt));
 
@@ -117,20 +99,10 @@ exports.issueMaterial = async (req, res) => {
             }
 
             if (batch.qty <= remainingToIssue) {
-                pickingList.push({
-                    materialId: material._id,
-                    materialName: material.name,
-                    lotNumber: batch.lotNumber,
-                    qty: batch.qty
-                });
+                pickingList.push({ materialId: material._id, materialName: material.name, lotNumber: batch.lotNumber, qty: batch.qty });
                 remainingToIssue -= batch.qty;
             } else {
-                pickingList.push({
-                    materialId: material._id,
-                    materialName: material.name,
-                    lotNumber: batch.lotNumber,
-                    qty: remainingToIssue
-                });
+                pickingList.push({ materialId: material._id, materialName: material.name, lotNumber: batch.lotNumber, qty: remainingToIssue });
                 batch.qty -= remainingToIssue;
                 remainingToIssue = 0;
                 updatedBatches.push(batch);
@@ -142,7 +114,6 @@ exports.issueMaterial = async (req, res) => {
         await material.save();
     }
 
-    // 4. Update Job Card with Handover Data
     job.issuedMaterials = pickingList.map(p => ({
         materialId: p.materialId,
         materialName: p.materialName,
@@ -152,51 +123,35 @@ exports.issueMaterial = async (req, res) => {
         date: new Date()
     }));
 
-    // Move to next stage
     job.currentStep = 'Cutting_Pending'; 
     job.status = 'In_Progress';
     
-    // 🟢 AUDIT TRAIL: Record the Handover
     job.timeline.push({ 
         stage: 'Kitting', 
         action: 'Handover to Vendor',
         vendorName: routingName,
-        details: `Materials issued to ${routingName}. Lot Tracking Active.`,
+        details: `Materials issued for production.`,
         performedBy: req.user.name
     });
 
     await job.save();
-    
-    res.json({ 
-        success: true, 
-        msg: `Materials handed over to ${routingName} successfully.`,
-        job 
-    });
-
+    res.json({ success: true, msg: `Materials handed over to ${routingName} successfully.`, job });
   } catch (error) {
-    console.error("Issue Error:", error);
     res.status(500).json({ msg: error.message });
   }
 };
 
-
-// @desc    Vendor: Report work done, production qty, and wastage
-// @route   POST /api/vendors/dispatch
 // @desc    Vendor: Report Work Done & Wastage
-// @route   POST /api/vendors/dispatch
 exports.dispatchJob = async (req, res) => {
   try {
     const { jobId, actualQty, wastage } = req.body;
-
     const job = await JobCard.findOne({ jobId: jobId });
     if (!job) return res.status(404).json({ msg: "Job not found" });
 
-    // 🟢 Security: Ensure Rakesh is only updating his own job
     if (req.user.role === 'Vendor' && job.vendorId.toString() !== req.user.vendorId.toString()) {
       return res.status(403).json({ msg: "Unauthorized access to this job" });
     }
 
-    // Capture Vendor's Claim
     job.productionData.vendorDispatch = {
       isReady: true,
       actualQtyProduced: Number(actualQty),
@@ -210,7 +165,7 @@ exports.dispatchJob = async (req, res) => {
     job.timeline.push({
       stage: 'Vendor Dispatch',
       action: `Vendor reported ${actualQty} pcs ready`,
-      details: `Reported Wastage: ${wastage}kg. Awaiting Admin Verification.`,
+      details: `Wastage: ${wastage}kg. Sent to Assembly QC.`,
       performedBy: req.user.name
     });
 
@@ -221,19 +176,13 @@ exports.dispatchJob = async (req, res) => {
   }
 };
 
-// @desc    Admin: Final Verification & Stock Receipt
-// @route   POST /api/shopfloor/receive-v2
-// @desc    Admin: Final Verification & New Lot Generation
-// @route   POST /api/shopfloor/receive-v2
+// @desc    Admin: Final Verification & Stock Receipt (Gate 2)
 exports.receiveProcessV2 = async (req, res) => {
   try {
     const { jobId, finalQty, qcStatus, remarks } = req.body;
     const job = await JobCard.findOne({ jobId: jobId });
-
     if (!job) return res.status(404).json({ msg: "Job not found" });
 
-    // 🟢 1. GENERATE FINISHED GOODS LOT
-    // Example: STITCH-9946 (Stage + Job ID suffix)
     const newLot = `FG-${job.jobId.split('-').pop()}`;
 
     job.productionData.adminReceipt = {
@@ -244,19 +193,12 @@ exports.receiveProcessV2 = async (req, res) => {
       qcStatus: qcStatus
     };
 
-    // 🟢 2. UPDATE WAREHOUSE STOCK (Accountability)
     if (qcStatus === 'Pass') {
       const product = await Product.findById(job.productId);
       if (product) {
         product.stock.warehouse += Number(finalQty);
-        
-        // Record where these pieces came from in the Product's history
         if (!product.stock.batches) product.stock.batches = [];
-        product.stock.batches.push({
-          lotNumber: newLot,
-          qty: Number(finalQty),
-          date: new Date()
-        });
+        product.stock.batches.push({ lotNumber: newLot, qty: Number(finalQty), date: new Date() });
         await product.save();
       }
     }
@@ -267,7 +209,7 @@ exports.receiveProcessV2 = async (req, res) => {
     job.timeline.push({
       stage: 'Final Verification',
       action: `Admin verified ${finalQty} units`,
-      details: `Finished Goods Lot: ${newLot}. Wastage recorded: ${job.productionData.vendorDispatch.wastageQty}kg`,
+      details: `Finished Goods Lot: ${newLot}.`,
       performedBy: req.user.name
     });
 
@@ -278,100 +220,83 @@ exports.receiveProcessV2 = async (req, res) => {
   }
 };
 
-
-// backend/controllers/jobCardController.js
-
-// @desc    Vendor updates the current production stage
-// @route   POST /api/vendors/update-stage
+// @desc    Vendor: Stage Progression
 exports.updateJobStage = async (req, res) => {
   try {
-      const { jobId, stageResult } = req.body;
-      const job = await JobCard.findOne({ jobId });
+    const { jobId, stageResult } = req.body;
+    const job = await JobCard.findOne({ jobId });
+    if (!job) return res.status(404).json({ msg: "Job card not found" });
 
-      if (!job) return res.status(404).json({ msg: "Job card not found" });
+    if (stageResult === "Cutting_Completed") {
+      job.currentStep = "Stitching_Pending";
+    } else if (stageResult === "Stitching_Completed") {
+      // 🟢 CHANGE: Now Stitching Completion triggers the First QC Gate
+      job.currentStep = "QC_Pending";
+    }
 
-      // Logic to progress the 'currentStep' based on vendor action
-      if (stageResult === 'Cutting_Completed') {
-          job.currentStep = 'Stitching_Pending';
-      } else if (stageResult === 'Stitching_Completed') {
-          job.currentStep = 'Packaging_Pending';
-      }
+    job.history.push({
+      step: stageResult.replace("_", " "),
+      status: job.currentStep,
+      timestamp: new Date(),
+      note: `Stage updated by ${req.user.name}`
+    });
 
-      // Add to history for Material Accountability
-      job.history.push({
-          step: stageResult.replace('_', ' '),
-          status: job.currentStep,
-          timestamp: new Date(),
-          note: `Stage updated by ${req.user.name}`
-      });
-
-      await job.save();
-      res.json({ success: true, msg: "Stage updated successfully", nextStep: job.currentStep });
+    await job.save();
+    res.json({ success: true, msg: "Stage updated successfully", nextStep: job.currentStep });
   } catch (error) {
-      console.error("Update Stage Error:", error);
-      res.status(500).json({ msg: error.message });
+    res.status(500).json({ msg: error.message });
   }
 };
+
 // ---------------------------------------------------------
-// 🟢 FIXED: RECEIVE PROCESS WITH HISTORY LOGGING
+// 🟢 UPDATED: RECEIVE PROCESS WITH SFG & DUAL-QC SUPPORT
 // ---------------------------------------------------------
-// @desc    Move Job to Next Stage (Receive Process)
-// @route   POST /api/shopfloor/receive
 exports.receiveProcess = async (req, res) => {
   try {
     const { jobId, nextStage } = req.body;
-
     const job = await JobCard.findOne({ jobId });
     if (!job) return res.status(404).json({ msg: "Job not found" });
 
-    // 🟢 1. CALCULATE HISTORY LOG BEFORE MOVING STAGE
-    // We check where the job IS right now to know what was just finished.
     let historyLog = {
-      stage: '',
-      action: 'Completed',
-      vendorName: 'In-House',
       timestamp: new Date(),
-      details: '',
-      performedBy: 'Production Mgr'
+      performedBy: req.user ? req.user.name : "Production Mgr",
     };
 
-    // If currently at Cutting -> We are finishing Cutting
-    if (job.currentStep === 'Cutting_Started') {
-        historyLog.stage = 'Cutting';
-        historyLog.action = 'Cutting Completed';
-        historyLog.vendorName = job.routing?.cutting?.vendorName || 'In-House';
-        historyLog.details = `Cut Panels Received from ${historyLog.vendorName}`;
+    // 🟢 DETECT TRANSITION FOR TIMELINE
+    if (job.currentStep === "Cutting_Started") {
+      historyLog.action = "Cutting Completed";
+      historyLog.details = "Panels cut and sent to Stitching.";
     } 
-    // If currently at Sewing -> We are finishing Sewing
-    else if (job.currentStep === 'Sewing_Started') {
-        historyLog.stage = 'Stitching';
-        historyLog.action = 'Stitching Completed';
-        historyLog.vendorName = job.routing?.stitching?.vendorName || 'In-House';
-        historyLog.details = `Garments Received from ${historyLog.vendorName}`;
+    else if (job.currentStep === "Sewing_Started") {
+      historyLog.action = "Stitching Completed";
+      historyLog.details = "Stitched items sent to Gate 1 Assembly QC.";
     }
-    // If currently at Packaging -> We are finishing Packaging
-    else if (job.currentStep === 'Packaging_Started') {
-        historyLog.stage = 'Packaging';
-        historyLog.action = 'Packaging Completed';
-        historyLog.vendorName = job.routing?.packing?.vendorName || 'In-House';
-        historyLog.details = `Packed Goods Ready for QC`;
+    else if (job.currentStep === "Packaging_Pending") {
+      historyLog.action = "Packaging Started";
+      historyLog.details = `Started packing using SFG Lot: SFG-${job.jobId.split('-').pop()}`;
+    }
+    else if (job.currentStep === "Packaging_Started") {
+      historyLog.action = "Packaging Completed";
+      historyLog.details = "Packed goods sent to Gate 2 Final QC.";
     }
 
-    // 🟢 2. PUSH TO TIMELINE (New Standard)
-    if (historyLog.stage) {
-        if (!job.timeline) job.timeline = [];
-        job.timeline.push(historyLog);
+    if (historyLog.action) {
+      job.timeline.push(historyLog);
     }
 
-    // 3. Update Stage
+    // 🟢 UPDATE STATE
     job.currentStep = nextStage;
-    if (nextStage === "QC_Pending") job.status = "QC_Pending";
+    
+    // Logic: If next is QC, status must be QC_Pending to show on QC page
+    if (nextStage === "QC_Pending") {
+        job.status = "QC_Pending";
+    } else {
+        job.status = "In_Progress";
+    }
 
     await job.save();
-    res.json({ success: true, msg: `Moved to ${nextStage}`, job });
-    
+    res.json({ success: true, msg: "Stage Advanced", job });
   } catch (error) {
-    console.error("Receive Error:", error);
     res.status(500).json({ msg: error.message });
   }
 };

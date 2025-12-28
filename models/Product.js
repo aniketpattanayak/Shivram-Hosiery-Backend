@@ -28,11 +28,20 @@ const ProductSchema = new mongoose.Schema({
       qtyRequired: { type: Number, required: true }
   }],
   
-  stock: {
-    warehouse: { type: Number, default: 0 },
-    reserved: { type: Number, default: 0 },
-    batches: [{ lotNumber: String, qty: Number, date: { type: Date, default: Date.now } }]
-  }
+  // ... existing schema ...
+// backend/models/Product.js
+stock: {
+  warehouse: { type: Number, default: 0 },
+  reserved: { type: Number, default: 0 },
+  // 🟢 SFG Array: Tracks pieces that are stitched but not packed
+  semiFinished: [{
+    lotNumber: String,
+    qty: Number,
+    jobId: String,
+    date: { type: Date, default: Date.now }
+  }],
+  batches: [{ lotNumber: String, qty: Number, date: { type: Date, default: Date.now } }]
+}
 }, { timestamps: true });
 
 // 🟢 NEW: Pre-Save Hook to Auto-Calculate Health Status

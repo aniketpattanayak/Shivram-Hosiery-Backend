@@ -31,8 +31,20 @@ exports.getStats = async (req, res) => {
       ]),
     ]);
 
+    // backend/controllers/dashboardController.js inside getStats
+
     const inventoryValue = products.reduce((acc, item) => {
-      return acc + (item.stock?.warehouse || 0) * (item.sellingPrice || 0);
+      const readyVal = (item.stock?.warehouse || 0) * (item.sellingPrice || 0);
+
+      // 🟢 Add SFG value to the Dashboard's "Inventory Value" card
+      const sfgStock =
+        item.stock?.semiFinished?.reduce(
+          (sum, lot) => sum + (lot.qty || 0),
+          0
+        ) || 0;
+      const sfgVal = sfgStock * (item.costPerUnit || 0);
+
+      return acc + readyVal + sfgVal;
     }, 0);
 
     // Extract revenue safely

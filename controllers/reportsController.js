@@ -59,25 +59,45 @@ exports.getProductionReport = async (req, res) => {
 };
 
 // @desc    Get Current Inventory Value Snapshot
+// backend/controllers/reportsController.js
+
 exports.getInventoryReport = async (req, res) => {
   try {
     const products = await Product.find();
-    const productData = products.map(p => ({
-      Type: 'Finished Good',
-      Name: p.name,
-      Stock: p.stock?.warehouse || 0,
-      UnitPrice: p.sellingPrice || 0,
-      TotalValue: (p.stock?.warehouse || 0) * (p.sellingPrice || 0)
-    }));
+    const productData = products.map(p => {
+      // 🟢 1. Calculate Quantity
+      const readyStock = p.stock?.warehouse || 0;
+      const sfgStock = p.stock?.semiFinished?.reduce((sum, lot) => sum + (lot.qty || 0), 0) || 0;
+      
+      // 🟢 2. Calculate Values
+      const readyValue = readyStock * (p.sellingPrice || 0);
+      
+      // Senior Tip: We value SFG at Cost Price, not Selling Price, 
+      // because they aren't sellable yet.
+      const sfgValue = sfgStock * (p.costPerUnit || 0); 
+
+      return {
+        Type: 'Finished Good',
+        Name: p.name,
+        'Ready Stock': readyStock,
+        'WIP (Stitched)': sfgStock, // 🟢 New column in CSV
+        'Ready Value': readyValue,
+        'WIP Value': sfgValue,      // 🟢 New value column
+        TotalValue: readyValue + sfgValue
+      };
+    });
 
     const materials = await Material.find();
     const materialData = materials.map(m => ({
       Type: 'Raw Material',
       Name: m.name,
-      Stock: m.stock?.current || 0,
-      UnitPrice: m.costPerUnit || 0,
+      'Ready Stock': m.stock?.current || 0,
+      'WIP (Stitched)': 0,
+      'Ready Value': (m.stock?.current || 0) * (m.costPerUnit || 0),
+      'WIP Value': 0,
       TotalValue: (m.stock?.current || 0) * (m.costPerUnit || 0)
     }));
+
     res.json([...productData, ...materialData]);
   } catch (error) {
     console.error("Inventory Report Error:", error);

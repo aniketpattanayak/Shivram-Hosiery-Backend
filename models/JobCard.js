@@ -3,7 +3,6 @@ const mongoose = require('mongoose');
 const JobCardSchema = new mongoose.Schema({
   jobId: { type: String, required: true, unique: true }, 
   
-  // Links
   isBatch: { type: Boolean, default: false },
   planId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductionPlan' },
   batchPlans: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ProductionPlan' }],
@@ -26,7 +25,7 @@ const JobCardSchema = new mongoose.Schema({
     enum: [
       'Pending', 'In_Progress', 'Completed', 
       'QC_Pending', 'QC_Passed', 'QC_Failed', 
-      'QC_HOLD', 'QC_Rejected'
+      'QC_HOLD', 'QC_Rejected', 'Ready_For_Packing'
     ], 
     default: 'Pending' 
   },
@@ -34,18 +33,17 @@ const JobCardSchema = new mongoose.Schema({
   currentStep: { 
     type: String, 
     enum: [
-      'Material_Pending',     // Kitting Stage
-      'Cutting_Pending',      // Next Stage
+      'Material_Pending',     
+      'Cutting_Pending',      
       'Cutting_Started', 
       'Cutting_Completed',
-      'Stitching_Pending',   // 🟢 ADD THIS
-      'Stitching_Started',   // 🟢 ADD THIS
-      'Stitching_Completed', // 🟢 ADD THIS
-      'Packaging_Pending',   // 🟢 ADD THIS
-      'Sewing_Started', 
-      'Packaging_Started',
-      'QC_Pending', 
-      'QC_Completed',
+      'Stitching_Pending',   
+      'Sewing_Started',      // Consistently used for the Stitching process
+      'Stitching_Completed', 
+      'Packaging_Pending',   // 🟢 GATE 1 PASS: Waiting for worker to start packing
+      'Packaging_Started',   // 🟢 PACKING IN PROGRESS
+      'QC_Pending',          // 🟢 ACTIVE QC GATE (Used for both Gate 1 and Gate 2)
+      'QC_Completed',        // FINAL STAGE
       'Procurement_Pending', 
       'PO_Raised',
       'QC_Review_Needed',
@@ -54,7 +52,6 @@ const JobCardSchema = new mongoose.Schema({
     default: 'Material_Pending' 
   },
 
-  // KITTING & STORE DATA
   customBOM: [{ 
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' }, 
     materialName: String, 
@@ -62,7 +59,6 @@ const JobCardSchema = new mongoose.Schema({
     requiredQty: Number 
   }],
 
-  // 🟢 NEW: Accountability Data Slot
   productionData: {
     vendorDispatch: {
       isReady: { type: Boolean, default: false },
@@ -74,6 +70,11 @@ const JobCardSchema = new mongoose.Schema({
       isReceived: { type: Boolean, default: false },
       finalQtyReceived: { type: Number, default: 0 },
       receivedAt: { type: Date }
+    },
+    // 🟢 SFG TRACEABILITY SLOT
+    sfgSource: {
+        lotNumber: String,
+        qtyUsed: Number
     }
   },
 
@@ -89,7 +90,6 @@ const JobCardSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now }
   }],
 
-  // QC RESULT DATA 
   qcResult: {
     totalBatchQty: Number,
     sampleSize: Number,
@@ -102,7 +102,6 @@ const JobCardSchema = new mongoose.Schema({
     date: Date
   },
 
-  // 🟢 FIXED ROUTING ENUMS (Allows both "Job Work" and "Job-Work")
   routing: {
     cutting: { 
       type: { type: String, enum: ['In-House', 'Job Work', 'Job-Work'] }, 

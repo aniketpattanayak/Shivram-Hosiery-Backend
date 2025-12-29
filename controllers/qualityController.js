@@ -19,11 +19,8 @@ exports.getPendingQC = async (req, res) => {
   }
 };
 
-// @desc    Submit QC Result (The Gatekeeper Logic)
+// @desc    Submit QC Result (Gatekeeper with Fixed Hold Logic)
 // @route   POST /api/quality/submit
-
-// backend/controllers/qualityController.js
-
 exports.submitQC = async (req, res) => {
   try {
     const { jobId, sampleSize, qtyRejected, notes } = req.body;
@@ -31,7 +28,7 @@ exports.submitQC = async (req, res) => {
     const job = await JobCard.findOne({ jobId });
     if (!job) return res.status(404).json({ msg: 'Job not found' });
 
-    // 🛑 STOP SIGN: Ensure the physical handshake happened 1st
+    // Ensure physical receipt before QC
     if (job.logisticsStatus === 'In_Transit') {
       return res.status(400).json({ 
         msg: 'Physical Receipt Required! You must receive these goods on the Shop Floor before performing QC.' 
@@ -41,12 +38,45 @@ exports.submitQC = async (req, res) => {
     const product = await Product.findById(job.productId);
     if (!product) return res.status(404).json({ msg: 'Product not found' });
 
-    const inspectorName = req.user ? req.user.name : "Unknown Inspector";
     const totalBatchQty = job.totalQty || 0; 
     const rejected = Number(qtyRejected) || 0;
     const passedQty = totalBatchQty - rejected; 
+    const inspectorName = req.user ? req.user.name : "Unknown Inspector";
 
-    // --- Path Logic: Assembly QC (Gate 1) vs Final QC (Gate 2) ---
+    // 🟢 NEW: QC HOLD TRIGGER
+    // If there is even ONE rejection, block stock addition and send to Admin
+    if (rejected > 0) {
+        job.status = 'QC_HOLD';
+        job.currentStep = 'QC_Review_Needed';
+        
+        // Save the result details so Admin knows why it was held
+        job.qcResult = {
+            status: 'Held',
+            sampleSize: Number(sampleSize),
+            rejectedQty: rejected,
+            passedQty: passedQty,
+            notes: notes,
+            inspector: inspectorName,
+            timestamp: new Date()
+        };
+
+        if (!job.history) job.history = [];
+        job.history.push({ 
+            step: 'Quality Control', 
+            status: 'Held',
+            details: `QC FAILED: ${rejected} items rejected. Pending Admin Review.`,
+            timestamp: new Date() 
+        });
+
+        await job.save();
+        return res.json({ 
+            success: false, 
+            hold: true, 
+            msg: `QC Hold Triggered: ${rejected} units rejected. Sent to Admin Review.` 
+        });
+    }
+
+    // --- Path Logic (Only runs if rejected === 0) ---
     const hasPassedAssembly = job.history?.some(h => h.step === 'Assembly QC');
 
     if (!hasPassedAssembly) {
@@ -62,7 +92,7 @@ exports.submitQC = async (req, res) => {
 
         job.currentStep = 'Packaging_Pending'; 
         job.status = 'Ready_For_Packing'; 
-        job.logisticsStatus = 'At_Source'; // Ready to be issued for Packing
+        job.logisticsStatus = 'At_Source';
 
         if (!job.history) job.history = [];
         job.history.push({ 
@@ -100,7 +130,7 @@ exports.submitQC = async (req, res) => {
     await product.save();
     await job.save();
 
-    res.json({ success: true, msg: `QC Passed! Status: ${job.currentStep}` });
+    res.json({ success: true, msg: `QC Approved! Status: ${job.currentStep}` });
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }
@@ -121,6 +151,9 @@ exports.getHeldQC = async (req, res) => {
 
 // @desc    Admin Decision: Approve or Reject Held Batch
 // @route   POST /api/quality/review
+
+// backend/controllers/qualityController.js
+
 exports.reviewQC = async (req, res) => {
   try {
     const { jobId, decision, adminNotes } = req.body; 
@@ -134,15 +167,17 @@ exports.reviewQC = async (req, res) => {
     const adminName = req.user ? req.user.name : "Admin";
 
     if (decision === 'approve') {
-        const passedQty = job.qcResult.passedQty || (job.totalQty - job.qcResult.rejectedQty);
+        const passedQty = job.qcResult?.passedQty || (job.totalQty - (job.qcResult?.rejectedQty || 0));
         
-        // Determine if we are overriding an SFG check or a Final FG check based on step
-        const isAssemblyOverride = job.currentStep === 'QC_Review_Needed' && job.qcResult.status === 'Held' && !job.productionData?.sfgSource?.lotNumber;
+        // Use existing history to see if this is Assembly (SFG) or Final (FG)
+        const isAssemblyGate = !job.history?.some(h => h.step === 'Assembly QC');
         
         if (passedQty > 0) {
-            if (isAssemblyOverride) {
-                // To SFG
-                const sfgLot = `SFG-${job.jobId.split('-').pop()}-FORCE`;
+            if (isAssemblyGate) {
+                // MOVE TO SEMI-FINISHED (SFG)
+                const sfgLot = `SFG-${job.jobId.split('-').pop()}-OVR`;
+                if (!product.stock.semiFinished) product.stock.semiFinished = [];
+                
                 product.stock.semiFinished.push({
                     lotNumber: sfgLot,
                     qty: Number(passedQty),
@@ -150,51 +185,57 @@ exports.reviewQC = async (req, res) => {
                     jobId: job.jobId
                 });
                 job.currentStep = 'Packaging_Pending';
-                job.status = 'Ready_For_Packing';
+                job.status = 'Ready_For_Packing'; 
             } else {
-                // To Warehouse
+                // MOVE TO WAREHOUSE (FG)
                 product.stock.warehouse += Number(passedQty);
+                if (!product.stock.batches) product.stock.batches = [];
+                
                 product.stock.batches.push({
-                    lotNumber: `FG-${job.jobId.split('-').pop()}-FORCE`, 
+                    lotNumber: `FG-${job.jobId.split('-').pop()}-OVR`, 
                     qty: Number(passedQty),
                     date: new Date(),
-                    inspector: `${adminName} (Admin Override)`
+                    inspector: `${adminName} (Override)`
                 });
-                job.status = 'Completed';
+                job.status = 'Completed'; 
                 job.currentStep = 'QC_Completed';
             }
             await product.save();
+        } else {
+            // 🟢 FIX: If Passed Qty is 0, we use your EXISTING valid statuses
+            // This prevents the "Validation Failed" error you saw
+            job.status = 'Completed'; 
+            job.currentStep = 'QC_Completed';
         }
 
         job.history.push({
-            step: 'QC Review',
-            status: 'Force Approved',
-            details: `Admin ${adminName} overrode QC Hold. Note: ${adminNotes}`,
+            step: 'Admin QC Review',
+            status: 'Approved',
+            details: `Admin ${adminName} accepted. Passed: ${passedQty}. Notes: ${adminNotes}`,
             timestamp: new Date()
         });
 
-        await job.save();
-        return res.json({ success: true, msg: `✅ Batch Force Approved.` });
-
     } else if (decision === 'reject') {
+        // Use existing valid rejection statuses
         job.status = 'QC_Rejected';
         job.currentStep = 'Scrapped';
         
         job.history.push({
-            step: 'QC Review',
+            step: 'Admin QC Review',
             status: 'Rejected',
-            details: `Admin ${adminName} rejected the held batch. Note: ${adminNotes}`,
+            details: `Rejected by Admin ${adminName}. Notes: ${adminNotes}`,
             timestamp: new Date()
         });
-
-        await job.save();
-        return res.json({ success: true, msg: "❌ Batch Rejected. No stock added." });
     }
 
-    res.status(400).json({ msg: "Invalid decision" });
+    // 🟢 Save the Job: Since status is no longer 'QC_HOLD', it will disappear from review
+    await job.save();
 
+    res.json({ 
+        success: true, 
+        msg: decision === 'approve' ? '✅ Batch Accepted & Stock Updated' : '❌ Batch Scrapped' 
+    });
   } catch (error) {
-    console.error("QC Review Error:", error);
     res.status(500).json({ msg: error.message });
   }
 };

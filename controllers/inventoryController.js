@@ -74,26 +74,62 @@ exports.updateMaterial = async (req, res) => {
   }
 };
 
-// @desc    QC Approval (Factory -> Finished Goods)
+// @desc    QC Approval (Gateway for SFG and FG with HOLD Logic)
 exports.approveQC = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
   try {
-    const { jobId, qtyPassed, qtyRejected } = req.body;
+    const { jobId, qtyPassed, qtyRejected, type } = req.body; // type: 'SFG' (Assembly) or 'FG' (Final)
     const job = await JobCard.findOne({ jobId }).populate('planId').session(session);
-    
-    job.currentStep = 'QC_Completed';
-    job.history.push({ step: 'QC', status: 'Completed', timestamp: new Date(), note: `Passed: ${qtyPassed}` });
-    await job.save({ session });
+    if (!job) throw new Error('Job Card not found');
 
     const plan = await ProductionPlan.findById(job.planId).session(session);
     const product = await Product.findById(plan.product).session(session);
 
-    product.stock.warehouse += qtyPassed; // Add to stock
+    // 🟢 RESTORED: QC HOLD LOGIC
+    // If there is any rejection, the job is put on HOLD for manager review
+    if (Number(qtyRejected) > 0) {
+      job.currentStep = 'QC_Hold';
+      job.history.push({ 
+        step: 'QC Inspection', 
+        status: 'Hold', 
+        timestamp: new Date(), 
+        note: `REJECTED: ${qtyRejected}. Job moved to Hold status for review.` 
+      });
+    } else {
+      job.currentStep = 'QC_Completed';
+      job.history.push({ 
+        step: 'QC Inspection', 
+        status: 'Completed', 
+        timestamp: new Date(), 
+        note: `PASSED: ${qtyPassed}` 
+      });
+    }
+
+    // 🟢 SFG vs FG GATEWAY
+    // Moves pieces to the correct stock location in the Product Master based on inspection stage
+    if (type === 'SFG') {
+      // Logic for Assembly/Stitching Inspection (moves to Semi-Finished Goods array)
+      if (!product.stock.semiFinished) product.stock.semiFinished = [];
+      product.stock.semiFinished.push({
+        lotNumber: job.lotNumber || `JOB-${jobId}`,
+        qty: Number(qtyPassed),
+        jobId: job.jobId,
+        date: new Date()
+      });
+    } else {
+      // Logic for Final Inspection (moves directly to Warehouse Finished Goods)
+      product.stock.warehouse += Number(qtyPassed);
+    }
+
+    await job.save({ session });
     await product.save({ session });
 
     await session.commitTransaction();
-    res.json({ success: true, msg: 'QC Approved.' });
+    res.json({ 
+        success: true, 
+        msg: qtyRejected > 0 ? 'QC Warning: Rejections found, Job put on HOLD.' : 'QC Approved Successfully.' 
+    });
   } catch (error) {
     await session.abortTransaction();
     res.status(500).json({ msg: error.message });
@@ -163,13 +199,13 @@ exports.addMaterial = async (req, res) => {
   }
 };
 
-// 🟢 NEW: FORCE RECALCULATION (Fixes the Calculation Discrepancy)
+// 🟢 FORCE RECALCULATION (Fixes Calculation Discrepancies)
 exports.recalculateAll = async (req, res) => {
   try {
     const materials = await Material.find();
     
     // Loop through every material and save it.
-    // This triggers the 'pre-save' hook in the Model, applying the new Math.
+    // This triggers the 'pre-save' hook in the Model, applying the new Math formula.
     for (const mat of materials) {
         await mat.save();
     }
@@ -181,6 +217,6 @@ exports.recalculateAll = async (req, res) => {
   }
 };
 
-// Aliases
+// Aliases for compatibility
 exports.createMaterial = exports.addMaterial;
-exports.getAllStock = exports.getStock; // Ensure compatibility
+exports.getAllStock = exports.getStock;

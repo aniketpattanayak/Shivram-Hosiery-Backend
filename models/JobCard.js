@@ -51,6 +51,18 @@ const JobCardSchema = new mongoose.Schema({
     ],
     default: 'Material_Pending' 
   },
+  logisticsStatus: { 
+    type: String, 
+    enum: ['At_Source', 'In_Transit', 'Received_At_Factory'], 
+    default: 'At_Source' 
+  },
+  receivedLogs: [{
+    stage: String,
+    expectedQty: Number,
+    receivedQty: Number,
+    receivedBy: String,
+    date: { type: Date, default: Date.now }
+  }],
 
   customBOM: [{ 
     materialId: { type: mongoose.Schema.Types.ObjectId, ref: 'Material' }, 

@@ -14,6 +14,7 @@ const SampleSchema = new mongoose.Schema({
   fabricType: { type: String },     // e.g. Cotton 60s, Denim, Silk
   color: { type: String },          // e.g. Navy Blue, Red
   sku: { type: String },            // Optional manual SKU for samples
+  remarks: { type: String, default: "" },
   // ------------------
 
   client: { type: String, default: 'Internal' },

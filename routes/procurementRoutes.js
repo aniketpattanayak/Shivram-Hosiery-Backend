@@ -3,11 +3,18 @@ const router = express.Router();
 const procurementController = require('../controllers/procurementController');
 const purchaseController = require('../controllers/purchaseController'); 
 const { protect, admin } = require('../middleware/auth');
+const shopFloorController = require('../controllers/jobCardController');
+
+router.post('/dispatch-job', protect, shopFloorController.dispatchJob);
+router.post('/receive-handshake', protect, shopFloorController.receiveHandshake);
 
 // --- Standard Purchase & Direct Entry ---
 router.post('/purchase', procurementController.createPurchase);
 router.post('/direct-entry', procurementController.createDirectEntry);
 router.get('/direct-entry', procurementController.getDirectHistory);
+// backend/routes/procurementRoutes.js
+// Add this line below your receive-handshake route
+router.post('/update-stage', protect, shopFloorController.updateJobStage);
 
 // 🟢 NEW: Route to fetch vendors for the Production Split Strategy Modal
 // This connects the frontend StrategyModal to the backend list of vendors

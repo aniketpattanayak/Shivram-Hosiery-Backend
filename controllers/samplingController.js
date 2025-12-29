@@ -100,8 +100,14 @@ exports.issueSampleStock = async (req, res) => {
 // @route   PUT /api/sampling/status
 exports.updateStatus = async (req, res) => {
   try {
-    const { sampleId, status } = req.body;
-    const sample = await Sample.findByIdAndUpdate(sampleId, { status }, { new: true });
+    const { sampleId, status, remarks } = req.body;
+    // 🟢 FIXED: Now updating both status AND remarks
+    const sample = await Sample.findByIdAndUpdate(
+      sampleId, 
+      { status, remarks }, 
+      { new: true }
+    );
+    if (!sample) return res.status(404).json({ msg: "Sample not found" });
     res.json(sample);
   } catch (error) {
     res.status(500).json({ msg: error.message });

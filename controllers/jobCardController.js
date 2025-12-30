@@ -283,7 +283,7 @@ exports.updateJobStage = async (req, res) => {
     const job = await JobCard.findOne({ jobId });
     if (!job) return res.status(404).json({ msg: "Job card not found" });
 
-    // 🟢 Internal Transitions (No logistics change)
+    // 🟢 KEEPING ALL YOUR ORIGINAL INTERNAL TRANSITIONS
     if (stageResult === "Cutting_Started") {
       job.currentStep = "Cutting_Started";
     } 
@@ -293,19 +293,29 @@ exports.updateJobStage = async (req, res) => {
     else if (stageResult === "Sewing_Started") {
       job.currentStep = "Sewing_Started";
     }
-    // 🟢 ADD THIS: Handle Packaging Start
     else if (stageResult === "Packaging_Started") {
       job.currentStep = "Packaging_Started";
     }
 
+    // 🟢 UPDATED: History now captures 'performedBy' from the logged-in user
     job.history.push({
       step: stageResult.replace("_", " "),
       status: job.currentStep,
+      // This maps the active user to your Analytics spreadsheet
+      performedBy: req.user.name, 
       timestamp: new Date()
     });
 
     await job.save();
-    res.json({ success: true, msg: "Internal stage updated", nextStep: job.currentStep });
+    
+    // 🟢 Professional log to verify who moved the stage
+    console.log(`[Factory Intelligence] Stage updated to ${job.currentStep} by ${req.user.name}`);
+
+    res.json({ 
+      success: true, 
+      msg: `Internal stage updated by ${req.user.name}`, 
+      nextStep: job.currentStep 
+    });
   } catch (error) {
     res.status(500).json({ msg: error.message });
   }

@@ -4,7 +4,7 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const connectDB = require('./config/db');
-
+const analyticsRoutes = require('./routes/nalyticsRoutes');
 // 🟢 NEW: Import Helper Routes (For Dropdowns)
 const helperRoutes = require('./routes/helperRoutes');
 
@@ -37,7 +37,7 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.send('🏭 Factory ERP API is Running...');
 });
-
+app.use('/api/analytics', analyticsRoutes);
 // --- API ROUTES ---
 app.use('/api/dashboard/stats', require('./controllers/dashboardController').getStats);
 

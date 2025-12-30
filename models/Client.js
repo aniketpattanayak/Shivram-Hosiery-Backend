@@ -6,7 +6,7 @@ const ClientSchema = new mongoose.Schema({
   address: { type: String }, // Main Address
   billToAddress: { type: String },
   shipToAddress: { type: String },
-  
+  contactNumber: { type: String, required: true },
   // Contact Details
   contactPerson: { type: String },
   contactNumber: { type: String },
@@ -35,7 +35,7 @@ const ClientSchema = new mongoose.Schema({
     default: 'Medium', 
     enum: ['High', 'Medium', 'Low'] 
   },
-  
+
   // 🟢 CRM Fields (Status & History)
   status: { 
     type: String, 

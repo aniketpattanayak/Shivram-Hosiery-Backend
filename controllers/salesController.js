@@ -313,6 +313,14 @@ exports.updateLeadActivity = async (req, res) => {
 // 4. CLIENT MASTER
 // ==========================================
 
+// ==========================================
+// 4. CLIENT MASTER (🟢 UPDATED WITH BILLING CONTACT)
+// ==========================================
+
+// ==========================================
+// 4. CLIENT MASTER (🟢 UPDATED WITH BILLING CONTACT)
+// ==========================================
+
 exports.getClients = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -356,7 +364,11 @@ exports.createClient = async (req, res) => {
     if (req.user && (req.user.role === 'Sales Man' || req.user.role === 'Salesman')) {
         salesPersonName = req.user.name;
     }
-    const newClient = await Client.create({ ...req.body, salesPerson: salesPersonName });
+    // 🟢 Capture billingContact and billToAddress during creation
+    const newClient = await Client.create({ 
+        ...req.body, 
+        salesPerson: salesPersonName 
+    });
     res.status(201).json(newClient);
   } catch (error) {
     res.status(500).json({ msg: error.message });
@@ -366,26 +378,25 @@ exports.createClient = async (req, res) => {
 exports.updateClient = async (req, res) => {
   try {
     const { 
-        name, gstNumber, address, contactPerson, contactNumber, email, paymentTerms, salesPerson, 
+        name, gstNumber, address, billToAddress, contactPerson, contactNumber, 
+        billingContact, email, paymentTerms, salesPerson, 
         interestedProducts, leadType, status, lastActivity 
     } = req.body;
     
     const client = await Client.findById(req.params.id);
     if (!client) return res.status(404).json({ msg: 'Client not found' });
 
-    const isMasterUpdate = name || gstNumber || address || contactPerson || email || paymentTerms || salesPerson || interestedProducts || leadType;
     const isAdmin = req.user && (req.user.role === 'Admin' || req.user.role === 'Manager');
 
-    if (isMasterUpdate && !isAdmin) {
-        return res.status(403).json({ msg: "Access Denied: Only Admins can edit Client Master details." });
-    }
-
+    // 🟢 ALLOW ADMINS TO UPDATE MASTER FIELDS
     if (isAdmin) {
         if (name) client.name = name;
         if (gstNumber) client.gstNumber = gstNumber;
         if (address) client.address = address;
+        if (billToAddress) client.billToAddress = billToAddress; // Added
         if (contactPerson) client.contactPerson = contactPerson;
         if (contactNumber) client.contactNumber = contactNumber;
+        if (billingContact !== undefined) client.billingContact = billingContact; // 🟢 Added Billing Phone
         if (email) client.email = email;
         if (paymentTerms) client.paymentTerms = paymentTerms;
         if (salesPerson) client.salesPerson = salesPerson;
@@ -393,6 +404,7 @@ exports.updateClient = async (req, res) => {
         if (leadType) client.leadType = leadType;
     }
 
+    // 🟢 ALLOW ALL ROLES TO UPDATE STATUS/ACTIVITY
     if (status || lastActivity) {
       if (status) client.status = status;
       if (!client.activityLog) client.activityLog = [];
@@ -408,6 +420,7 @@ exports.updateClient = async (req, res) => {
     await client.save();
     res.json(client);
   } catch (err) {
+    console.error(err);
     res.status(500).send('Server Error');
   }
 };

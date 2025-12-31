@@ -1,5 +1,7 @@
 const JobCard = require("../models/JobCard");
 const mongoose = require("mongoose");
+// 🟢 NEW: Import Order model to fetch sales pipeline stats
+const Order = require("../models/Order"); 
 
 exports.getFactoryIntelligence = async (req, res) => {
   try {
@@ -13,6 +15,28 @@ exports.getFactoryIntelligence = async (req, res) => {
       };
     }
 
+    // 🟢 1. FETCH ORDER STATS (Total, Pending, Ready)
+    const orderPipeline = await Order.aggregate([
+      {
+        $facet: {
+          total: [{ $count: "count" }],
+          pending: [
+            { 
+              $match: { 
+                status: { $in: ["Production_Queued", "Production_Started"] } 
+              } 
+            },
+            { $count: "count" }
+          ],
+          ready: [
+            { $match: { status: "Ready_to_Dispatch" } },
+            { $count: "count" }
+          ]
+        }
+      }
+    ]);
+
+    // 📊 2. EXISTING FACTORY DATA (JobCards)
     const data = await JobCard.aggregate([
       { $match: query },
       {
@@ -111,21 +135,20 @@ exports.getFactoryIntelligence = async (req, res) => {
             },
           ],
 
-          // 👥 4. MASTER WORKFORCE AUDIT (The "One-by-One" Logic)
+          // 👥 4. MASTER WORKFORCE AUDIT
           "employees": [
-  { $unwind: "$history" },
-  {
-    $group: {
-      _id: { $ifNull: ["$history.performedBy", "Unknown Operator"] },
-      engagement: { $sum: 1 },
-      output: { $sum: "$totalQty" },
-      // Calculates revenue based on a fixed rate or mapped price
-      valueManaged: { $sum: { $multiply: ["$totalQty", 100] } }, 
-      lastSync: { $max: "$history.timestamp" }
-    }
-  },
-  { $sort: { engagement: -1 } }
-],
+            { $unwind: "$history" },
+            {
+              $group: {
+                _id: { $ifNull: ["$history.performedBy", "Unknown Operator"] },
+                engagement: { $sum: 1 },
+                output: { $sum: "$totalQty" },
+                valueManaged: { $sum: { $multiply: ["$totalQty", 100] } }, 
+                lastSync: { $max: "$history.timestamp" }
+              }
+            },
+            { $sort: { engagement: -1 } }
+          ],
 
           // 🏭 5. PRODUCTION FLOW
           production: [
@@ -152,6 +175,7 @@ exports.getFactoryIntelligence = async (req, res) => {
       },
     ]);
 
+    // 🟢 3. MERGE BOTH AGGREGATIONS INTO FINAL RESPONSE
     const result = data[0] || {
       sales: [],
       salesTrends: [],
@@ -160,6 +184,14 @@ exports.getFactoryIntelligence = async (req, res) => {
       employees: [],
       defectAnalysis: [],
     };
+
+    // Attach order pipeline stats to the result
+    result.orderStats = {
+      total: orderPipeline[0]?.total[0]?.count || 0,
+      pending: orderPipeline[0]?.pending[0]?.count || 0,
+      ready: orderPipeline[0]?.ready[0]?.count || 0
+    };
+
     res.json(result);
 
   } catch (error) {

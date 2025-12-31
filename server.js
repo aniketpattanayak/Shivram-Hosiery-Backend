@@ -5,7 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const connectDB = require('./config/db');
 const analyticsRoutes = require('./routes/nalyticsRoutes');
-// 🟢 NEW: Import Helper Routes (For Dropdowns)
+const returnRoutes = require('./routes/returnRoutes');
 const helperRoutes = require('./routes/helperRoutes');
 
 // Config
@@ -45,6 +45,7 @@ app.use('/api/dashboard/stats', require('./controllers/dashboardController').get
 // We mount these BEFORE the main routes to ensure they are checked first
 app.use('/api/inventory', helperRoutes);   // Serves /api/inventory/materials
 app.use('/api/procurement', helperRoutes); // Serves /api/procurement/vendors
+app.use('/api/returns', returnRoutes);
 
 // Commercial Routes
 app.use('/api/products', require('./routes/productRoutes'));

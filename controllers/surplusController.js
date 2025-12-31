@@ -12,12 +12,12 @@ exports.getSurplusReport = async (req, res) => {
             let currentLotQty = 0;
             let found = false;
 
-            // 🟢 ARCHITECT FIX 1: Ensure we are searching with a proper ObjectId
             const searchId = new mongoose.Types.ObjectId(entry.itemId);
 
+            // 🟢 BUG FIX: Specific logic for Raw Material batches
             if (entry.itemType === 'Raw Material') {
                 const mat = await Material.findById(searchId);
-                // 🟢 ARCHITECT FIX 2: Check specifically within mat.stock.batches
+                // In Material.js, stock is under 'stock' object
                 if (mat && mat.stock && mat.stock.batches) {
                     const batch = mat.stock.batches.find(b => b.lotNumber === entry.lotNumber);
                     if (batch) {
@@ -26,9 +26,10 @@ exports.getSurplusReport = async (req, res) => {
                     }
                 }
             } 
+            // 🟢 BUG FIX: Specific logic for Finished Good batches
             else if (entry.itemType === 'Finished Good') {
                 const prod = await Product.findById(searchId);
-                // 🟢 ARCHITECT FIX 3: Finished Goods often have a different structure
+                // In Product.js, stock is also under 'stock' object
                 if (prod && prod.stock && prod.stock.batches) {
                     const batch = prod.stock.batches.find(b => b.lotNumber === entry.lotNumber);
                     if (batch) {
@@ -38,8 +39,7 @@ exports.getSurplusReport = async (req, res) => {
                 }
             }
 
-            // 🟢 ARCHITECT FIX 4: Use Logic "B" (Surplus stays until main stock is gone)
-            // Remaining Surplus = Min(Original Surplus Added, Current Stock in Lot)
+            // Logic B: Surplus stays at max until main stock is gone
             let remainingSurplus = 0;
             if (found) {
                 remainingSurplus = Math.min(entry.surplusAdded, currentLotQty);
@@ -54,7 +54,7 @@ exports.getSurplusReport = async (req, res) => {
                 orderedQty: entry.orderedQty,
                 receivedQty: entry.receivedQty,
                 originalSurplus: entry.surplusAdded,
-                currentTotalInLot: currentLotQty, // 🎯 If this is 0, the batch ID wasn't found
+                currentTotalInLot: currentLotQty, 
                 remainingSurplus: remainingSurplus,
                 receivedAt: entry.receivedAt
             });

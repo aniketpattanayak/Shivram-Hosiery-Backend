@@ -46,6 +46,7 @@ app.use('/api/dashboard/stats', require('./controllers/dashboardController').get
 app.use('/api/inventory', helperRoutes);   // Serves /api/inventory/materials
 app.use('/api/procurement', helperRoutes); // Serves /api/procurement/vendors
 app.use('/api/returns', returnRoutes);
+app.use('/api/surplus', require('./routes/surplusRoutes'));
 
 // Commercial Routes
 app.use('/api/products', require('./routes/productRoutes'));

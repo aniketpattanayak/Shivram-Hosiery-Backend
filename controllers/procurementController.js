@@ -3,6 +3,7 @@ const Product = require('../models/Product');
 const Vendor = require('../models/Vendor');
 const PurchaseOrder = require('../models/PurchaseOrder'); 
 const JobCard = require('../models/JobCard');
+const SurplusLedger = require('../models/SurplusLedger');
 
 // @desc Process Purchase (PO Generation - Standard)
 exports.createPurchase = async (req, res) => {
@@ -49,17 +50,19 @@ exports.createDirectEntry = async (req, res) => {
     const session = await require('mongoose').startSession();
     session.startTransaction();
     try {
-        const { vendorId, items } = req.body; // items = [{ itemId, itemType, qty, rate, batch }]
-
+        const { vendorId, items } = req.body; 
         const createdEntries = [];
         let grandTotal = 0;
+
+        const vendorDoc = await Vendor.findById(vendorId).session(session);
+        const vendorName = vendorDoc ? vendorDoc.name : "Unknown Vendor";
 
         for (const item of items) {
             const lineTotal = Number(item.qty) * Number(item.rate);
             grandTotal += lineTotal;
             let itemName = "Unknown";
             
-            // 🟢 1. Handle Batch Number (User provided OR Auto-generated)
+            // 🟢 ARCHITECT FIX: Generate ID ONCE for both Ledger and Batch
             const finalBatchNumber = item.batch && item.batch.trim() !== "" 
                 ? item.batch 
                 : `DIR-${Date.now()}-${Math.floor(Math.random()*1000)}`;
@@ -70,66 +73,68 @@ exports.createDirectEntry = async (req, res) => {
                 addedAt: new Date()
             };
 
-            // 🟢 2. Update Inventory Stock & Push Batch
+            // 🟢 SURPLUS LOGIC (Using synchronized finalBatchNumber)
+            const orderedAmount = Number(item.orderedQty) || Number(item.qty); 
+            if (Number(item.qty) > orderedAmount) {
+                await SurplusLedger.create([{
+                    lotNumber: finalBatchNumber, // 🎯 Synchronized
+                    vendorName: vendorName,
+                    itemId: item.itemId,
+                    itemName: item.label || "Item",
+                    itemType: item.itemType,
+                    orderedQty: orderedAmount,
+                    receivedQty: Number(item.qty),
+                    surplusAdded: Number(item.qty) - orderedAmount
+                }], { session });
+            }
+
+            // 🟢 UPDATE INVENTORY (Using synchronized finalBatchNumber)
             if (item.itemType === 'Raw Material') {
                 const mat = await Material.findById(item.itemId).session(session);
                 if (mat) {
-                    mat.stock.current += Number(item.qty); // Increase Total
-                    mat.costPerUnit = Number(item.rate); // Update Cost
-                    
-                    // Add to Batch History
+                    mat.stock.current += Number(item.qty);
                     if (!mat.stock.batches) mat.stock.batches = [];
                     mat.stock.batches.push(batchEntry);
-
                     itemName = mat.name;
                     await mat.save({ session });
                 }
             } else if (item.itemType === 'Finished Good') {
                 const prod = await Product.findById(item.itemId).session(session);
                 if (prod) {
-                    prod.stock.warehouse += Number(item.qty); // Increase Total
-                    
-                    // Add to Batch History (Assuming Product model has stock.batches)
-                    // If your Product model structure is different, adjust this path.
+                    prod.stock.warehouse += Number(item.qty);
                     if (!prod.stock) prod.stock = { warehouse: 0, reserved: 0, batches: [] };
                     if (!prod.stock.batches) prod.stock.batches = [];
                     prod.stock.batches.push(batchEntry);
-
                     itemName = prod.name;
                     await prod.save({ session });
                 }
             }
 
-            // 🟢 3. Create "Completed" Purchase Record
             const entry = await PurchaseOrder.create([{
                 item_id: item.itemId,
                 vendor_id: vendorId,
                 itemName: itemName,
                 itemType: item.itemType,
-                orderedQty: Number(item.qty),
+                orderedQty: orderedAmount,
                 receivedQty: Number(item.qty),
                 unitPrice: Number(item.rate),
                 totalAmount: lineTotal,
                 isDirectEntry: true,
                 status: 'Completed',
-                // Optional: Save batch in PO record too if needed later
-                // batchNumber: finalBatchNumber 
+                batchNumber: finalBatchNumber // 🎯 Traceable ID
             }], { session });
             
             createdEntries.push(entry[0]);
         }
 
-        // 4. Update Vendor Balance
         if (vendorId) {
             await Vendor.findByIdAndUpdate(vendorId, { $inc: { balance: grandTotal } }).session(session);
         }
 
         await session.commitTransaction();
-        res.status(201).json({ success: true, msg: "Stock Added & Batches Created!", entries: createdEntries });
-
+        res.status(201).json({ success: true, msg: "Stock Added!", entries: createdEntries });
     } catch (error) {
         await session.abortTransaction();
-        console.error("Direct Entry Error:", error);
         res.status(500).json({ msg: error.message });
     } finally {
         session.endSession();
@@ -192,16 +197,7 @@ exports.createTradingPO = async (req, res) => {
     }
 };
 
-// backend/controllers/procurementController.js
 
-// ... keep all your existing code (createPurchase, createDirectEntry, etc.) ...
-
-// 🟢 ADD THIS AT THE BOTTOM
-// @desc    Get all vendors for selection in Production Strategy
-// @route   GET /api/procurement/vendors
-// @desc    Get all vendors for selection in Production Strategy
-// @route   GET /api/procurement/vendors
-// backend/controllers/procurementController.js
 
 exports.getAllVendors = async (req, res) => {
     try {

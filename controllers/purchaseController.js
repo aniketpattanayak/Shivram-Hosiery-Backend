@@ -1,6 +1,7 @@
 const PurchaseOrder = require('../models/PurchaseOrder'); 
 const Product = require('../models/Product');
 const Material = require('../models/Material');
+const SurplusLedger = require('../models/SurplusLedger');
 
 exports.getOpenOrders = async (req, res) => {
     try {
@@ -113,7 +114,11 @@ exports.processQCDecision = async (req, res) => {
         res.status(500).json({ msg: error.message });
     }
 };
-// @desc Receive Order (Updated with History Log)
+
+
+
+
+
 exports.receiveOrder = async (req, res) => {
     const session = await require('mongoose').startSession();
     session.startTransaction();
@@ -124,53 +129,72 @@ exports.receiveOrder = async (req, res) => {
             mode, qcBy, sampleSize, rejectedQty 
         } = req.body;
 
-        const order = await PurchaseOrder.findById(id).session(session);
+        const order = await PurchaseOrder.findById(id).session(session).populate('vendor_id');
         if (!order) return res.status(404).json({ msg: 'Order not found' });
 
         let stockToAdd = 0;
         let finalStatus = 'Partial'; 
         let historyStatus = 'Received';
         let responseMsg = "";
-        let isHighRejection = false; // Flag to track failure
+        let isHighRejection = false; 
+
+        // 🟢 ARCHITECT FIX: Generate the Lot Number ONCE to ensure consistency
+        // This variable is now shared between SurplusLedger and Inventory Batches
+        const finalLotNumber = lotNumber && lotNumber.trim() !== "" 
+            ? lotNumber 
+            : `PO-${order._id.toString().substr(-4)}-${Date.now()}`;
 
         // --- QC LOGIC ---
         if (mode === 'qc') {
-            // Prevent division by zero
             const size = Number(sampleSize) > 0 ? Number(sampleSize) : Number(qtyReceived);
             const rejectionRate = (Number(rejectedQty) / size) * 100;
             
-            // 🔴 CHECK: Is Rejection > 20%?
             if (rejectionRate > 20) {
                 isHighRejection = true;
-                
-                // Set status to QC_Review (Hides it from main list)
                 order.status = 'QC_Review';
-                order.qcStatus = 'Failed'; // Optional: Flag for UI
-                
+                order.qcStatus = 'Failed'; 
                 historyStatus = `QC Failed (${rejectionRate.toFixed(1)}%)`;
                 responseMsg = `⚠️ High Rejection (${rejectionRate.toFixed(1)}%). Sent to Admin Review.`;
-                
-                // IMPORTANT: We do NOT add stock for failed QC
                 stockToAdd = 0; 
-
             } else {
-                // PASS
                 historyStatus = 'QC Passed';
-                // Only add the Good Quantity
                 stockToAdd = Number(qtyReceived) - Number(rejectedQty); 
                 responseMsg = `✅ QC Passed. Added ${stockToAdd} Good Units.`;
             }
         } else {
-            // DIRECT RECEIVE
             stockToAdd = Number(qtyReceived);
             historyStatus = 'Direct Receive';
             responseMsg = `✅ Direct Receive. Added ${stockToAdd} Units.`;
         }
 
-        // --- 1. UPDATE INVENTORY (Only if NOT High Rejection) ---
+        // --- 🟢 SURPLUS TRACKING LOGIC (Using synchronized finalLotNumber) ---
+        if (stockToAdd > 0 && !isHighRejection) {
+            const totalAfterThis = order.receivedQty + Number(qtyReceived);
+            
+            if (totalAfterThis > order.orderedQty) {
+                const previousSurplus = Math.max(0, order.receivedQty - order.orderedQty);
+                const newTotalSurplus = Math.max(0, totalAfterThis - order.orderedQty);
+                const surplusFromThisBatch = newTotalSurplus - previousSurplus;
+
+                if (surplusFromThisBatch > 0) {
+                    await SurplusLedger.create([{
+                        lotNumber: finalLotNumber, // 🎯 Matches Inventory Batch exactly
+                        vendorName: order.vendor_id?.name || "PO Vendor",
+                        itemId: order.item_id,
+                        itemName: order.itemName,
+                        itemType: order.itemType,
+                        orderedQty: order.orderedQty,
+                        receivedQty: Number(qtyReceived),
+                        surplusAdded: surplusFromThisBatch
+                    }], { session });
+                }
+            }
+        }
+
+        // --- 1. UPDATE INVENTORY (Using synchronized finalLotNumber) ---
         if (stockToAdd > 0 && !isHighRejection) {
             const batchEntry = {
-                lotNumber: lotNumber || `PO-${order._id.toString().substr(-4)}-${Date.now()}`,
+                lotNumber: finalLotNumber, // 🎯 Matches Surplus Ledger exactly
                 qty: stockToAdd,
                 addedAt: new Date()
             };
@@ -189,22 +213,21 @@ exports.receiveOrder = async (req, res) => {
         }
 
         // --- 2. UPDATE PO STATUS ---
-        // Only update receivedQty if it wasn't a total failure
         if (!isHighRejection) {
             order.receivedQty += Number(qtyReceived); 
             if (order.receivedQty >= order.orderedQty) finalStatus = 'Completed';
-            // Only update status to Partial/Completed if we are NOT in QC_Review
             if (order.status !== 'QC_Review') order.status = finalStatus;
         }
 
-        // --- 3. HISTORY LOG (Save this even if it failed!) ---
+        // --- 3. HISTORY LOG ---
         order.history.push({
             date: new Date(),
             qty: Number(qtyReceived),
-            rejected: Number(rejectedQty) || 0, // Good to track this
+            rejected: Number(rejectedQty) || 0,
             mode: mode,
             receivedBy: qcBy || "Store Manager",
-            status: historyStatus
+            status: historyStatus,
+            lotNumber: finalLotNumber // 🎯 Logged for traceability
         });
 
         await order.save({ session });
